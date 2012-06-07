@@ -1,0 +1,204 @@
+\documentclass[12pt]{article}
+
+\usepackage{graphicx}
+\usepackage{makeidx}
+\usepackage{tocloft}
+\usepackage{parskip}
+\usepackage{upquote}
+\usepackage{verbatim}
+\usepackage{float}
+\usepackage{listings}
+\usepackage{url}
+\usepackage[utf8x]{inputenc}
+\usepackage[usenames]{color}
+
+\definecolor{lg}{rgb}{0.9,0.9,0.9}
+\definecolor{dg}{rgb}{0.3,0.3,0.3}
+%\def\url#1{\ft #1}
+\def\ft{\small\tt}
+\def\floor#1{\lfloor #1 \rfloor}
+\lstset{
+   language=python,
+   basicstyle=\footnotesize,
+   breaklines=true, basicstyle=\ttfamily\color{black}\footnotesize,
+   keywordstyle=\bf\ttfamily,
+   commentstyle=\it\ttfamily,
+   stringstyle=\color{dg}\it\ttfamily,
+   numbers=left, numberstyle=\color{dg}\tiny, stepnumber=1, numbersep=5pt,
+   backgroundcolor=\color{lg}, tabsize=4, showspaces=false,
+   showstringspaces=false
+}
+
+\title{QCL, OpenCL Metaprogramming for QCD\\(WORKING DRAFT)}
+\author{Massimo Di Pierro \\ \footnotesize{School of Computing - DePaul University - 243 S Wabash Ave - Chicago, IL - USA}}
+
+\begin{document}
+\maketitle
+\begin{abstract}
+\end{abstract}
+
+\section{Introduction}
+
+More law continues to deliver us faster CPUs every year. Yet this is no longer achieved by increasing CPU clock frequency because of limitations in heath dissipation. Instead computing speed is obtaining by increasing the number of processing units (cores) per CPU. The extreme is reached in GPU devices which can include hundreds of core per chip.
+
+This called for a new programming paradigm. NVDIA, a major manufactorer of GPU chips and cards, introduced CUDA. CUDA is a prallel programming architectures in which code kernels runs as parellel threads on different cores. The kernels are programmed in a C-like language. OpenCL is an open standard very similar to CUDA and it is also based on kernels. There are some syntactical and semantic differences between CUDA and OpenCL but very little differences in performance. We chose to write our software in OpenCl instead of CUDA for one main reason: CUDA code only works on NVDIA GPU devices. OpenCL code compiles and runs almost everywhere and is suppored by Intel, AMD, Nvidia, and ARM. OpenCL code shows performance improvements over ordinary C even on regular Intel CPUs, because of better handling of multithreading.
+
+We have implemented a metaprogramming engine called QCL which takes a high level description of a gauge or fermionic action expressed in terms of paths, and generate optimzed OpenCL code for the corresponding actions. Specifically it generates code required for the heatbath, the HMC, fermionic D slash operators and inverters.
+
+As example we have generated code for the Wilson gauge action, the Iwasaki gauge action, the wilson/clover fermionic action, and the staggered/asqtad action. our code generation works for abitrary lattice dimensions, arbitrary gauge groups, and different quark representations (fundamental, adjoint).
+
+The QCL engine is written in the Python because most of the task it performs consist of abstract manipulations of paths which is easier to handle in Python then in C++. The generated OpenCL can be saved but it can also be run within QCL itself thanks to the pyOpenCL library. This allows scientists of designing new actions and operators in terms of paths and symmetries, generate the code, and run it within one platform, without external linking and compilation steps.
+
+\section{Paths}
+
+In what follows we will use the symbol $d$ to refer to the lattice dimension and $n$ to refer to the $SU(n)$ gauge group.
+
+Actions can be written in terms of paths on a lattice.
+For example {\ft (+1,-2,-1,+2)} corresponds to the plaquette:
+\begin{equation}
+U_{+1}(x)U_{-2}(x+\hat{1})U_{-1}(x+\hat{1}-\hat{2})
+\end{equation}
+and $\hat{1}$ and $\hat{2}$ are versors along the corrsponding directions.
+
+We distinguish different types of paths:
+\begin{itemize}
+\item Concerete paths. They are paths which are associated to a starting point and corrispond to a well defined product of link matrices. The previous example is a concrete example associated to point $x$.
+\item Shape paths. They are equivalence classes of all paths of the same shame but having different starting point. For example {\ft (+1,-2,-1,+2)} when $x$ is not specified is a shape path. A shape path together with a starting point becomes a concrete path and it can be evaulated into a product of link matrices.
+\item Abtract paths. They are equivalence classes of shape paths under the symmetries of the action. In our case we are only interested in the $BC(d)$ group of rotations and mirror symmetries of a hypercube in $d$ dimentions. For example for $d=3$, the paths {\ft (+1,-2,-1,+2)} and {\ft (+1,-3,-1,+3)} follow in the same equivalence class and we use one or the other to represent the class of Abstract paths. This class contains $6*4$ shape paths in $d=3$ dimensions and $8*6$ shape paths in $d=4$ dimensions.
+\end{itemize}
+There are three basic operations we can perform with paths:
+\begin{itemize}
+\item Given a set of abstract paths we can symmetrize them to build the corrsponding set of distinct shape paths.
+\item Given a set of shape paths we can translate them at every point in the lattice and obtain a larger set of concerete paths.
+\item Given a set of shape paths we can generate all concrete paths which have one of those shapes and contain a specific gauge link (to implement the gauge action and compute force terms).
+\item Given a set of concrete paths we can compute the product of links along each path and obtain a matrix. For multiple overlapping paths, in principle, it should be possible to organize the order of matrix multiplications in order to minimize the number of arithmetic operations.
+\end{itemize}
+
+Notice there two ways to build paths shape paths from abstract paths depending on whether the paths are to be traced over (as in the gauge actions) or not (as in the fermionic actions). If the paths are to be traced over, then all shape paths which go through the same point are to be treated as equivalent because the product of link associated to {\ft (+1,-2,-1,+2)} and starting at $x$ is the same as the product of links assciated to {\ft (-2,-1,+2,+1)} and starting at $x+\hat{1}$.
+
+QCL provides functions to perform the following operations. Here are some examples.
+\subsubsection*{Creating abstract paths}
+\begin{lstlisting}
+>>> from qcd import *
+>>> path = (+1,+2,-1,-2)
+\end{lstlisting}
+\subsubsection*{Simmetrizing abstract paths}
+\begin{lstlisting}
+>>> paths = bc_symmetrize(path,d=4)
+>>> print paths
+[(2, 1, -2, -1), (3, 1, -3, -1), (4, 1, -4, -1), 
+ (-2, 1, 2, -1), (-3, 1, 3, -1), (-4, 1, 4, -1),
+ ...
+ (1, -4, -1, 4), (2, -4, -2, 4), (3, -4, -3, 4), 
+ (-1, -4, 1, 4), (-2, -4, 2, 4), (-3, -4, 3, 4)]
+\end{lstlisting}
+\subsubsection*{Remove cyclic permutations}
+\begin{lstlisting}
+>>> paths = remove_duplicates(paths,bidirectional=True)
+>>> print paths
+[(2, 1, -2, -1), (3, 1, -3, -1), (4, 1, -4, -1),
+ (3, 2, -3, -2), (4, 2, -4, -2), (4, 3, -4, -3)]
+\end{lstlisting}
+({\ft bidirection=True} is the default and it means that one path and its reverse should treated as one).
+\subsubsection*{Compute all paths (staples) containg given link}
+\begin{lstlisting}
+>>> staples = derive_paths(paths,+1,bidirectional=True)
+>>> print staples
+[(-2, -1, 2), (2, -1, -2), (-3, -1, 3),
+ (3, -1, -3), (-4, -1, 4), (4, -1, -4)]
+\end{lstlisting}
+({\ft bidirection=True} is the default. Here is means that both a path and its reversed should be considered when checking if the path passes through link +1).
+\subsubsection*{Find the inverse path}
+\begin{lstlisting}
+>>> path = backward_path((+1,+2,-3,-2,+4,-2))
+>>> print path
+(2, -4, 2, 3, -2, -1)
+\end{lstlisting}
+
+\subsubsection*{Determine the most efficient way to evaluate one or more paths}
+\begin{lstlisting}
+>>> paths = [(-2, -1, +2), (-2, -2, -1, +2,+2)]
+>>> print minimum_spanning_graph(paths)
+[((-2,), (-1,)), ((-2, -1), (2,)),
+ ((-2, -1, 2), (2,)), ((-2,), (-2, -1, 2, 2))]
+\end{lstlisting}
+This is suggesting to multiply $A(x) = U_{-2}(x)U_{-1}(x-\hat{2})$ and store it (for every $x$), then $B(x) = A(x)U_{2}(x-\hat{2}-\hat{1})$, then compute $C(x) = B(x)U_{2}(x-\hat{1})$ and $D(x)=U_{-2}(x) C(x-\hat{2})$. $B(x)$ is the 3-staple and $D(x)$ is the 5 staple. Notice QCL suggests 4 multiplications in total instead of the native 6 multiplications.
+
+With OpenCL the most efficient product order in terms of minimal numer of arithmetic operations is not necessarily the most overall effcient because there is an extra cost of storing intermediate results. In fact, often, it is better not to store intermediate results and duplicate computation. This avoid the memory access bottle neck. The optimal strategy if very much architecture dependent and it may not be possible to figure it out just by looking at the formula. For this reason QCL does not try minimze arithmetic operations if this requires additional storage other the local storage.
+
+In the next section we will discuss how QCL generates OpenCL code to perform the corresponding matrix products.
+
+\section{Lattices, Sites, Fields, and Algorithms}
+
+QCL defined three major classes:
+\begin{itemize}
+\item {\ft class Lattice}: it encodes the information about the lattice dimension and size. This class contains methods to convert the coordinate representation of a site to the index necessary to retrieve field variables from ram and vice versa.
+\item {\ft class Site}: it stores the coordinates of a lattice site.
+\item {\ft class Field}: it stores field variables according to the indicization of the associated lattice. The same {\ft class Field} is used for all types of fields. Internally it delegates the storage to a {\ft numpy} array. {\ft class Field} also has methods to load and save a field, and for synchronizaiton of field variables when running in parallel (this part is not implemented yet and will be discussed later).
+\end{itemize}
+
+Any QCL program starts by creating an instance of a communicator:
+\begin{lstlisting}
+>>> comm = Communicator()
+\end{lstlisting}
+and ore more lattices:
+\begin{lstlisting}
+>> space = comm.Lattice(dims=(4,4,4,4))
+\end{lstlisting}
+Here {\ft dims} is a tuple of lattice size, the length of the tuple determines $d$, the number of dimensions.
+Given a lattice one can define a site on it:
+\begin{lstlisting}
+>>> p = space.Site(coords=(0,0,0,0))
+\end{lstlisting}
+and fields, for example a gauge field:
+\begin{lstlisting}
+>>> U = space.Field(siteshape=(4,3,3))
+\end{lstlisting}
+a fermionic field:
+\begin{lstlisting}
+>>> phi = space.Field(siteshape=(4,3))
+\end{lstlisting}
+or a staggered field:
+\begin{lstlisting}
+>>> chi = space.Field(siteshape=(3,))
+\end{lstlisting}
+Here {\ft siteshape} determines the size and share of the structure of a site. An optional argument {\ft dtype} determines the type of each element and it default to {\ft numpy.complex64}.
+
+A field can be loaded and saved with:
+\begin{lstlisting}
+U.load('filenname.mdp',format='fermiqcd')
+U.save('filenname.mdp',format='fermiqcd')
+\end{lstlisting}
+The format default to ``fermiqcd'' and this is the only supported format specifically designed to be able to handle any type of field and any number of dimensions. For gauges fields in 4-dimensions, {\ft siteshape=(4,3,3)}, {\ft format='milc'} is also recognized.
+
+Field complex elements can be accessed with
+\begin{lstlisting}
+>>> U[p,mu,i,j] = 0.3+0.2j
+>>> print U[p,mu,i,j]
+\end{lstlisting}
+although this is only to be done for debugging purposes becuase very slow.
+
+QCL is not meant to be used to build algorithms in Python. It is meant to generate and algorithms in OpenCL. Those algorithms implement global parallel operations on the fields and they can be accessed from Python API as explaned below.
+
+Given a lattice and set of paths we can ask QCL to generate a OpenCL function that loops over all the paths, computes the trace of links along each path and comulates the resulting matrices into an output.
+
+For example the following code generate sum of the product of all stapes passing along a link {\ft +1}:
+
+
+\begin{lstlisting}
+>>>> print generate_opencl_gauge('staples',space,staples,sun=3)
+__kernel void name(__global float *out,                                        
+                   __global const float *U,
+                   unsigned long idx0) {
+...
+\end{lstlisting}
+
+The {\ft U} pointer to be passed to this function corresponds to the data stored in the {\ft U} field we defined in the previous example but it is not the same. OpenCL (like CUDA) requires that the data stored in the node memory be copied into the memory of the OpenCL device. 
+
+\section{Examples}
+
+\section{Conclusions}
+
+
+\end{document}
+
