@@ -313,6 +313,7 @@ kernel void heatbath(global cfloat_t *U,
 					      cfloat_conj(staples[j*n+k])));
 	  }	  
 	  heatbath_SU2(a,beta/n,ranluxcltab);
+	  // for test: a[0]=a[1]=a[2]=a[3]=(cfloat_t)(0,0);
 	  for(int k=0; k<n; k++) {
 	    ik = ixmu+i*n+k;
 	    jk = ixmu+j*n+k;

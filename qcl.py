@@ -337,7 +337,7 @@ class Field(object):
         self.sitesize = product(self.siteshape)
         self.dtype = dtype
         self.data = numpy.zeros([self.lattice.size]+self.siteshape,dtype=dtype)
-        print 'allocating %sKB' % int(0.001*self.lattice.size*self.sitesize*8)
+        print 'allocating %sbytes' % int(self.lattice.size*self.sitesize*8)
     def copy(self,other):
         """
         a.copy(b) # makes a copy of field b into field a.
@@ -520,8 +520,8 @@ class Field(object):
 
     def average_plaquette(self,shape=(1,2,-1,-2)):        
         paths = bc_symmetrize(shape,d=self.lattice.d,positive_only=True)
+        paths = remove_duplicates(paths,bidirectional=True)
         phi = self.lattice.Field(1).set_link_product(self,paths).run()
-        print len(paths)
         return phi.sum()/(self.lattice.size*len(paths)*self.siteshape[-1])
 
 class GaugeAction(object):
@@ -564,6 +564,7 @@ class GaugeAction(object):
             data_buffer = U.lattice.comm.buffer('rw',U.data)
             prg = U.lattice.comm.compile(source)            
             for size, x in self.lattice.bbox_range(displacement):
+                print size, x
                 prg.heatbath(U.lattice.comm.queue,
                              (size,),None,
                              data_buffer,
@@ -720,12 +721,34 @@ def test_heatbath():
     code = wilson.heatbath(U,beta=4.0)
     # print code.source
     for k in range(100):
+        print 'k=',k
         code.run()
         print '<plaq> =', U.average_plaquette()
         if N<8:
             U.check_unitarity(output=False)
         psi = U.data_component((0,0,0))
         Canvas().imshow(numpy.real(psi.data_slice((0,0)))).save()
+    print 'done!'
+
+def test_heatbath2():
+    N = 3
+    comm = Communicator()
+    space = comm.Lattice((N,N))
+    U = space.Field((2,2,2))
+    U.set_cold()
+    print 'cold <plaq> =', U.average_plaquette()
+    wilson = GaugeAction(space).add_term(1.0,(1,2,-1,-2))
+    #code = wilson.heatbath(U,beta=4.0)
+    # print code.source
+    for k in range(100000):
+        print 'k=',k
+        U.set_hot()
+        #code.run()
+        print '<plaq> =', U.average_plaquette()
+        if N<8:
+            U.check_unitarity(output=False)
+        #psi = U.data_component((0,0,0))        
+        #Canvas().imshow(numpy.real(psi.data_slice((0,0)))).save()
     print 'done!'
 
 
@@ -1157,7 +1180,19 @@ if __name__=='__main__':
     #test_paths()
     #test_lattice_fields()
     #test_opencl_paths()
-    test_heatbath()
+    #test_heatbath2()
+    comm = Communicator()
+    for d in range(2,5):
+        for k in range(2,10):
+            space = comm.Lattice([k]*d)
+            wilson = GaugeAction(space).add_term(1.0,(1,2,-1,-2))
+            for n in range(2,3):
+                # print [k]*d,n
+                U = space.Field((d,n,n))
+                U.set_cold()
+                for z in range(1):
+                    wilson.heatbath(U,beta=4.0).run()                    
+                    print z, k**d, n, U.average_plaquette()
     pass
 
 
