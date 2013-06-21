@@ -8,6 +8,8 @@ path = (+1,-2,-3,+2,+3,-1)
 attention sync,load,save and other functions are not parallel!
 """
 
+DEBUG = False
+
 import math
 import sys
 import os
@@ -115,7 +117,7 @@ def hermitian(U):
     """ returns the hermitian of the U matrix """
     return numpy.transpose(U).conj()
 
-def is_unitary(U,precision=1e-3):
+def is_unitary(U,precision=1e-4):
     """ checks if U is unitary within precision """
     return numpy.all(abs(U*hermitian(U)-identity(U.shape[0]))<precision)
 
@@ -263,7 +265,7 @@ class Lattice(object):
                         numpy.uint32(seed),self.prngstate_buffer)
     def prng_get(self):
         """ retrieves the state of the prng """
-        cl.enqueue_copy(self.comm.queue, self.prngstate, self.prngstate_buffer)
+        cl.enqueue_copy(self.comm.queue, self.prngstate, self.prngstate_buffer).wait()
     def prng_off(self):
         """ disabled the prng """
         self.prngstate = self.prngstate_buffer = None
@@ -337,7 +339,8 @@ class Field(object):
         self.sitesize = product(self.siteshape)
         self.dtype = dtype
         self.data = numpy.zeros([self.lattice.size]+self.siteshape,dtype=dtype)
-        print 'allocating %sbytes' % int(self.lattice.size*self.sitesize*8)
+        if DEBUG: 
+            print 'allocating %sbytes' % int(self.lattice.size*self.sitesize*8)
     def copy(self,other):
         """
         a.copy(b) # makes a copy of field b into field a.
@@ -473,8 +476,8 @@ class Field(object):
             function(self.lattice.comm.queue,(self.lattice.size,),None,
                      out_buffer, U_buffer,
                      numpy.int32(shape[0]), # 1 for trace, sun for no-trace
-                     self.lattice.bbox)
-            cl.enqueue_copy(self.lattice.comm.queue, self.data, out_buffer)
+                     self.lattice.bbox).wait()
+            cl.enqueue_copy(self.lattice.comm.queue, self.data, out_buffer).wait()
             return self        
         return Code(source,runner)
 
@@ -486,8 +489,8 @@ class Field(object):
         prg = self.lattice.comm.compile(makesource())
         prg.set_cold(self.lattice.comm.queue,(self.lattice.size,),None,
                      data_buffer,numpy.int32(shape[0]),numpy.int32(shape[1]),
-                     self.lattice.bbox)
-        cl.enqueue_copy(self.lattice.comm.queue, self.data, data_buffer)
+                     self.lattice.bbox).wait()
+        cl.enqueue_copy(self.lattice.comm.queue, self.data, data_buffer).wait()
 
     def check_cold(self):
         for idx in xrange(self.lattice.size):
@@ -503,10 +506,11 @@ class Field(object):
         prg = self.lattice.comm.compile(makesource())
         prg.set_hot(self.lattice.comm.queue,(self.lattice.size,),None,
                     data_buffer,numpy.int32(shape[0]),numpy.int32(shape[1]),
-                    self.lattice.bbox,self.lattice.prngstate_buffer)
-        cl.enqueue_copy(self.lattice.comm.queue, self.data, data_buffer)
+                    self.lattice.bbox,self.lattice.prngstate_buffer).wait()
+        cl.enqueue_copy(self.lattice.comm.queue, self.data, data_buffer).wait()
 
-    def check_unitarity(self,output=False):
+    def check_unitarity(self,output=DEBUG):
+        fail = False
         for idx in xrange(self.lattice.size):
             for mu in xrange(self.siteshape[0]):
                 U = numpy.matrix(self.data[idx,mu])
@@ -514,14 +518,24 @@ class Field(object):
                     print U
                     print 'det = %s' % numpy.linalg.det(U)
                 if not is_unitary(U):
-                    print hermitian(U)
-                    print U*hermitian(U)
-                    raise RuntimeError, "U is not unitary"
+                    #print idx, mu
+                    #print U
+                    #print U*hermitian(U)
+                    fail = True
+        if fail:
+            for idx in xrange(self.lattice.size):
+                for mu in xrange(self.siteshape[0]):
+                    U = numpy.matrix(self.data[idx,mu])
+                    print idx, mu, U
+                    if not is_unitary(U):
+                        print U*hermitian(U), 'FAIL!'
+            raise RuntimeError, "U is not unitary"
 
     def average_plaquette(self,shape=(1,2,-1,-2)):        
         paths = bc_symmetrize(shape,d=self.lattice.d,positive_only=True)
         paths = remove_duplicates(paths,bidirectional=True)
-        phi = self.lattice.Field(1).set_link_product(self,paths).run()
+        code = self.lattice.Field(1).set_link_product(self,paths)
+        phi=code.run()
         return phi.sum()/(self.lattice.size*len(paths)*self.siteshape[-1])
 
 class GaugeAction(object):
@@ -544,11 +558,11 @@ class GaugeAction(object):
         for mu in range(self.lattice.d):
             coefficients,paths = [], []
             for coefficient, cpaths in self.terms:
-                opaths = derive_paths(cpaths,mu if mu else 4)
+                opaths = derive_paths(cpaths,mu if mu else self.lattice.d)
                 for path in opaths:
                     coefficients.append(coefficient)
                     displacement = max(displacement,range_path(path)+1)
-                    paths.append(backward_path(path))
+                    paths.append(backward_path(path))                    
             code += opencl_paths(function_name = name+str(mu),
                                  lattice = self.lattice,
                                  coefficients=coefficients,
@@ -562,10 +576,12 @@ class GaugeAction(object):
             shape = U.siteshape
             if not (len(shape)==3 and shape[1]==shape[2]): raise RuntimeError
             data_buffer = U.lattice.comm.buffer('rw',U.data)
-            prg = U.lattice.comm.compile(source)            
+            prg = U.lattice.comm.compile(source)
             for size, x in self.lattice.bbox_range(displacement):
-                print size, x
-                prg.heatbath(U.lattice.comm.queue,
+                if DEBUG:
+                    print 'displacement: %s, size:%s, slice:%s' % (
+                        displacement, size, x)
+                event = prg.heatbath(U.lattice.comm.queue,
                              (size,),None,
                              data_buffer,
                              numpy.int32(shape[0]),
@@ -574,7 +590,10 @@ class GaugeAction(object):
                              numpy.int32(n_iter),
                              U.lattice.bbox,
                              U.lattice.prngstate_buffer)
-            cl.enqueue_copy(U.lattice.comm.queue, U.data, data_buffer)
+                if DEBUG:
+                    print 'waiting'
+                event.wait()
+            cl.enqueue_copy(U.lattice.comm.queue, U.data, data_buffer).wait()
             return self
         return Code(source,runner)
 
@@ -659,13 +678,20 @@ def BiCGStabInverter(phi,psi,action):
     pass
 
 def test_gauge():
+    Nc = 2
     for N in range(1,30):
         print N
         comm = Communicator()
         space = comm.Lattice((N,N,N,N))
-        U = space.Field((4,3,3))
+        U = space.Field((4,Nc,Nc))
+        print 'setting cold'
+        U.set_cold()
+        if N<8: U.check_unitarity()
+        assert abs(U.average_plaquette()) > 0.9999
         print 'setting hot'
         U.set_hot()
+        if N<8: U.check_unitarity()
+        assert abs(U.average_plaquette()) < 0.5
         print 'done'
 
 def test_lattice_fields():
@@ -688,69 +714,18 @@ def test_lattice_fields():
     if N<8: U.check_cold()
     if N<8: U.check_unitarity()
     
-    check_free_ram()
-
-    # other fields an stuff
-    scalar = space.Field(1).save('test.vtk')
     p = space.Site((0,0,0,0))
     psi = space.Field((4,3))
     chi = space.Field((4,3))
-    psi[p,1,2] = 2+3j
-    print psi[p,1,2]
-    check_free_ram()
+    psi[p,1,2] = 0.0 # set component to zezo
 
     phi = space.Field(1).set_link_product(U,[(1,2,-1,-2),(2,4,-2,-4)]).run()
-    print phi.sum()
-    phi = space.Field(1).set_link_product(U,[(1,),(2,),(3,),(4,)]).run()
-    #Canvas().hist(numpy.real(phi.data.flat)).save()
-    #Canvas().imshow(numpy.real(phi.data_slice((0,0)))).save()
+    assert phi.sum() == 4**4 * 3*2
 
-    print U.sum()
+    old = U.sum()
     U.save('test.npy')
     U.load('test.npy')
-    print U.sum()
-
-def test_heatbath():
-    N = int(sys.argv[1]) if len(sys.argv)>1 else 4
-    comm = Communicator()
-    space = comm.Lattice((N,N,N,N))
-    U = space.Field((4,3,3))
-    U.set_cold()
-    print 'cold <plaq> =', U.average_plaquette()
-    wilson = GaugeAction(space).add_term(1.0,(1,2,-1,-2))
-    code = wilson.heatbath(U,beta=4.0)
-    # print code.source
-    for k in range(100):
-        print 'k=',k
-        code.run()
-        print '<plaq> =', U.average_plaquette()
-        if N<8:
-            U.check_unitarity(output=False)
-        psi = U.data_component((0,0,0))
-        Canvas().imshow(numpy.real(psi.data_slice((0,0)))).save()
-    print 'done!'
-
-def test_heatbath2():
-    N = 3
-    comm = Communicator()
-    space = comm.Lattice((N,N))
-    U = space.Field((2,2,2))
-    U.set_cold()
-    print 'cold <plaq> =', U.average_plaquette()
-    wilson = GaugeAction(space).add_term(1.0,(1,2,-1,-2))
-    #code = wilson.heatbath(U,beta=4.0)
-    # print code.source
-    for k in range(100000):
-        print 'k=',k
-        U.set_hot()
-        #code.run()
-        print '<plaq> =', U.average_plaquette()
-        if N<8:
-            U.check_unitarity(output=False)
-        #psi = U.data_component((0,0,0))        
-        #Canvas().imshow(numpy.real(psi.data_slice((0,0)))).save()
-    print 'done!'
-
+    assert U.sum() == old
 
 # ###########################################################
 # Part II, paths and symmetries
@@ -924,6 +899,7 @@ class Code(object):
         self.source = source
         self.runner = runner
     def run(self,*args,**kwargs):
+        open('latest.c','w').write(self.source)
         return self.runner(self.source,*args,**kwargs)
 
 def opencl_matrix_multiply(matrix):
@@ -941,7 +917,7 @@ def opencl_paths(function_name, # name of the generated function
                  coefficients, # complex numbers storing coefficents of paths
                  sun, # SU(n) gauge group
                  precision = 'cfloat_t', # float or double precision
-                 initialize = True,
+                 initialize = False,
                  trace = False): # result is to be traced
     """
     Generates a OpenCL function which looks like:
@@ -960,6 +936,8 @@ def opencl_paths(function_name, # name of the generated function
     assumes out points to a nxn complex matrix. When False,
     out points to one complex number.
     """
+    if DEBUG:
+        print 'generating',function_name 
     DEFINE = precision+' %s = ('+precision+')(0.0,0.0);'
     NAME = 'm%.2i'
     CX = '%s_%ix%i'
@@ -977,7 +955,6 @@ def opencl_paths(function_name, # name of the generated function
     d = len(lattice.dims)
     n = sun
     site = lattice.Site(tuple(0 for i in lattice.dims))
-    p = site
     vars.append('unsigned long ixmu;')
     if initialize:
         if trace:
@@ -988,59 +965,64 @@ def opencl_paths(function_name, # name of the generated function
                     code.append("out[%i].x = out[%i].y = 0.0;" % (i*n+j,i*n+j))
 
     for ipath,path in enumerate(paths):
+        code.append('\n// path %s\n' % str(path))
+        p = site
+        #if DEBUG: print 'path:',path
         coeff = coefficients[ipath]
-        for z,mu in enumerate(path):
+        for z,mu in enumerate(path):            
             # print z, mu
-            op = p
-            if mu>0: key = (copy.copy(p.coords),mu)
-            p = p+mu # mu can be negative
             nu = abs(mu) % d
-            if mu<0: key = (copy.copy(p.coords),nu)
+            if mu>0: key = (copy.copy(p.coords),(mu,)) # individual link key
+            p = p+mu # mu can be negative
+            if mu<0: key = (copy.copy(p.coords),(-mu,)) # hermitian link key
             link_key = key
-            if not key in matrices:
+            # if DEBUG: print 'key:',key
+            if not key in matrices: # if need a new link
                 name = NAME % len(matrices)
                 matrices[key] = name
-                key2 = (site.coords,(mu,))
-                if mu>0:
-                    matrices[key2] = name
                 code.append('\n// load U%s -> %s' % (key,name))
                 for i,co in enumerate(key[0]):
                     code.append('shift.s[%s] = %s;' % (i,co))
                 code.append('ixmu = (idx2idx_shift(idx0,shift,bbox)*%s+%s)*%s;'%(d,nu,n*n))
+                ### load link U(0,mu,i,j)
                 for i in range(n):
                     for j in range(n):
                         var = CX % (name,i,j)
-                        vars.append(DEFINE % var)
                         code.append('%s = U[ixmu+%i];' % (var,n*i+j))
-                if z==0:
-                    if mu<0:
+                if z==0: # if first link in path
+                    if mu<0: # if backwards
+                        # compute the hermitian
                         name2 = NAME % len(matrices)
+                        key2 = (site.coords,(mu,)) # key for backward link
                         matrices[key2] = name2
                         for i in range(n):
                             for j in range(n):
-                                var2 = CX % (name2,i,j)
-                                vars.append(DEFINE % var2)
+                                var = CX % (name,i,j)
+                                var2 = CX % (name2,j,i)
                                 code.append('%s.x = %s.x;' %(var2,var))
                                 code.append('%s.y = -%s.y;' % (var2, var))
+            # if this is a link but the first in path
             if z>0:
                 key = (site.coords,tuple(path[:z+1]))
-                name = NAME % len(matrices)
-                matrices[key] = name
+                define_var = not key in matrices
+                if define_var:
+                    name = NAME % len(matrices)
+                    matrices[key] = name
+                else:
+                    name = matrices[key]
                 if not (site.coords,tuple(path[:z])) in matrices:
                     print matrices.keys()
                     print (site.coords,tuple(path[:z]))
                     raise RuntimeError
                 name1 = matrices[(site.coords,tuple(path[:z]))]
-
                 name2 = matrices[link_key]
-                if mu>0:
+                if mu>0: # if link forward
                     code.append('\n// compute %s*%s -> %s' % (name1,name2,name))
+                    # extend previous path
                     for i in range(n):
                         for j in range(n):
-                            var = CX % (name,i,j)
                             var_re = RE % (name,i,j)
                             var_im = IM % (name,i,j)
-                            vars.append(DEFINE % var)
                             k = 0
                             line = var_re +EQUAL
                             line += PLUS+RE % (name1,i,k);
@@ -1067,14 +1049,12 @@ def opencl_paths(function_name, # name of the generated function
                                 line += PLUS+IM % (name1,i,k);
                                 line += TIMES+RE % (name2,k,j);
                             code.append(line+';')
-                elif mu<0:
+                elif mu<0: # if link backwards ... same
                     code.append('\n// compute %s*%s^H -> %s' %(name1,name2,name))
                     for i in range(n):
                         for j in range(n):
-                            var = CX % (name,i,j)
                             var_re = RE % (name,i,j)
                             var_im = IM % (name,i,j)
-                            vars.append(DEFINE % var)
                             k = 0
                             line = var_re + EQUAL
                             line += PLUS+RE % (name1,i,k);
@@ -1121,6 +1101,12 @@ def opencl_paths(function_name, # name of the generated function
                             line = 'out[%s].y = out[%s].y + %f*' % (k,k,coeff)\
                                 + IM % (name,i,j)
                             code.append(line+';')
+    for name in sorted(matrices.values()):
+        for i in range(n):
+            for j in range(n):
+                var = CX % (name, i,j)
+                vars.append((DEFINE % var)+' //4')
+            
     body = '\n'.join('    '+line.replace('\n','\n    ') for line in vars+code)
     return """void %(name)s(
                 %(precision)s *out,
@@ -1138,6 +1124,9 @@ def opencl_paths(function_name, # name of the generated function
                 int gid = get_global_id(0);
                 const unsigned long idx = gid2idx(gid,&bbox);
                 cfloat_t tmp[MAXN*MAXN];
+                for(int i=0; i<n; i++)
+                    for(int j=0; j<n; j++)
+                        tmp[i*n+j]=(cfloat_t)(0.0,0.0);
                 %(name)s(tmp,U,idx,&bbox);
                 for(int i=0; i<n; i++)
                     for(int j=0; j<n; j++)
@@ -1159,7 +1148,8 @@ def test_kernel(comm,kernel_code,name,U):
     out_buffer = cl.Buffer(comm.ctx, comm.mf.WRITE_ONLY, 256) ### FIX NBYTES
     idx_buffer = cl.Buffer(comm.ctx, comm.mf.READ_ONLY, 32) # should not be
     core = open('kernels/qcl-core.c').read()
-    prg = cl.Program(comm.ctx,core + kernel_code).build()
+    prg = cl.Program(comm.ctx,core + kernel_code).build(
+        options=['-I',INCLUDE_PATH])
     # getattr(prg,name)(comm.queue,(4,4,4),None,out_buffer,u_buffer,idx_buffer)
 
 def test_opencl_paths():
@@ -1171,28 +1161,63 @@ def test_opencl_paths():
     #paths = remove_duplicates(paths,bidirectional=True)
     #paths = derive_paths(paths,1,bidirectional=True)
     paths = [(+1,+2,+3,-1,-2,-3)]
-    kernel_code = opencl_paths('staples',space,paths,sun=sun,trace=False)
+    kernel_code = opencl_paths(function_name='staples',
+                               lattice=space,
+                               paths=paths,
+                               coefficients = [1.0 for p in paths],
+                               sun=sun,
+                               trace=False)
     print kernel_code
     test_kernel(comm,kernel_code,'staples',U)
+
+def test_something():
+    comm = Communicator()
+    space = comm.Lattice((4,4))
+    U = space.Field((space.d,2,2))
+    for k in range(1000):
+        print k
+        U.set_hot()
+    
+
+def test_heatbath():
+    N = int(sys.argv[1]) if len(sys.argv)>1 else 4
+    Nc = 3
+    comm = Communicator()
+    space = comm.Lattice((N,N,N,N))
+    U = space.Field((space.d,Nc,Nc))
+    U.set_cold()
+    print '<plq> = ',U.average_plaquette()
+    wilson = GaugeAction(space)
+    wilson.add_term(1.0,(1,2,-1,-2))
+    wilson.add_term(1.0,(1,3,-1,-3))
+    wilson.add_term(1.0,(1,4,-1,-4))
+    wilson.add_term(1.0,(2,3,-2,-3))
+    wilson.add_term(1.0,(2,4,-2,-4))
+    wilson.add_term(1.0,(3,4,-3,-4))
+    code = wilson.heatbath(U,beta=100.0)
+    # print code.source
+    avg_plq = 0.0
+    for k in range(10000):
+        code.run()        
+        plq = U.average_plaquette()
+        avg_plq = (avg_plq * k + plq)/(k+1)
+        print '<plaq> =', avg_plq
+        if N<8:
+            U.check_unitarity(output=False)
+        if len(space.dims) == 4 and N==12:
+            psi = U.data_component((0,0,0))
+            Canvas().imshow(numpy.real(psi.data_slice((0,0)))).save()
+    print 'done!'
+
+
 
 if __name__=='__main__':
     #test_gauge()
     #test_paths()
     #test_lattice_fields()
     #test_opencl_paths()
-    #test_heatbath2()
-    comm = Communicator()
-    for d in range(2,5):
-        for k in range(2,10):
-            space = comm.Lattice([k]*d)
-            wilson = GaugeAction(space).add_term(1.0,(1,2,-1,-2))
-            for n in range(2,3):
-                # print [k]*d,n
-                U = space.Field((d,n,n))
-                U.set_cold()
-                for z in range(1):
-                    wilson.heatbath(U,beta=4.0).run()                    
-                    print z, k**d, n, U.average_plaquette()
+    test_heatbath()
+    #test_something()
     pass
 
 

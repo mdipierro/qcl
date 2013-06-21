@@ -1,17 +1,15 @@
 #include <pyopencl-complex.h>
 #include <pyopencl-ranluxcl.cl>
-#define PRINTF
-#ifdef PRINTF
-#pragma OPENCL EXTENSION cl_intel_printf : enable
+// #pragma OPENCL EXTENSION cl_intel_printf : enable
 // #pragma OPENCL EXTENSION cl_amd_printf : enable
-#endif
+
 #define Pi 3.141592653589793
 #define MAXD 10
 #define MAXN 32
 
 void assert(bool value)
 {
-  if(!value) exit(1);
+  // if(!value) exit(1);
 }
 
 struct bbox_t {
@@ -31,12 +29,15 @@ inline struct shift_t gid2shift(const size_t gid, const struct bbox_t *bbox) {
   struct shift_t shift;
   int dd;
   size_t i = gid;
-  size_t j;
-  for(int k=0; k<MAXD; k++) {
-    dd = (*bbox).c[k]/(*bbox).f[k];
-    j = i % dd;
-    shift.s[k] = j*(*bbox).f[k]+(*bbox).e[k];
-    i = (i - j) / dd;
+  for(int k=MAXD-1; k>=0; k--) {
+    dd = ((*bbox).c[k]-(*bbox).e[k])/(*bbox).f[k];
+    if((*bbox).d[k]==0 || dd==0) 
+      shift.s[k] = (*bbox).e[k];
+    else {
+      dd = (*bbox).c[k];
+      shift.s[k] = (i % dd)*(*bbox).f[k]+(*bbox).e[k];
+      i = i / dd;    
+    }
   }
   assert(i==0);
   return shift;
@@ -79,14 +80,13 @@ inline size_t shift2idx(const struct shift_t shift,
       idx *= d2;
       idx += (shift.s[k] + (*bbox).b[k] + d2) % d2;
     }
-  }
+  }  
   return idx;
 }
 
 inline size_t gid2idx(const size_t gid,
 		      const struct bbox_t *bbox) {
-  size_t idx = shift2idx(gid2shift(gid,bbox),bbox);
-  return idx;
+  return shift2idx(gid2shift(gid,bbox),bbox);
 }
 
 inline size_t gid2idx_shift(const size_t gid,
@@ -101,16 +101,29 @@ inline size_t idx2idx_shift(const size_t idx,
   return shift2idx(shiftdelta(idx2shift(idx,bbox),delta),bbox);
 }
 
-float4 uniform4(ranluxcl_state_t* prst) {
+float4 uniform4(global ranluxcl_state_t *ranluxcltab) {
   // this generates 4 uniform random numbers (x,y,z,w)
-  return ranluxcl32(prst);
+  float4 r;
+  ranluxcl_state_t rst;
+  ranluxcl_download_seed(&rst,ranluxcltab);
+  r = ranluxcl32(&rst);
+  ranluxcl_upload_seed(&rst,ranluxcltab);
+  // printf((char*)"%f %f %f %f\n",r.x,r.y,r.z,r.w); /* fails on amd */
+  // if(r.x==0) exit(1);
+  return r;
 }
 
-float4 gaussian4(ranluxcl_state_t* prst) {
-  return ranluxcl32norm(prst);
+float4 gaussian4(global ranluxcl_state_t *ranluxcltab) {
+  // this generates 4 gaussian random numbers (x,y,z,w)
+  ranluxcl_state_t rst;
+  ranluxcl_download_seed(&rst,ranluxcltab);
+  float4 x = ranluxcl32norm(&rst);
+  ranluxcl_upload_seed(&rst,ranluxcltab);
+  return x;
 }
 
-void SU(global cfloat_t *link, int n, ranluxcl_state_t *prst, int gid) {
+void SU(global cfloat_t *link, int n,
+	global ranluxcl_state_t *ranluxcltab, int gid) {
   
   cfloat_t a00,a01,a10,a11;
   cfloat_t b00,b10;
@@ -119,7 +132,7 @@ void SU(global cfloat_t *link, int n, ranluxcl_state_t *prst, int gid) {
   float phi, cos_theta, sin_theta;
   float4 v;
   if(n==1) {
-    alpha = 2.0*Pi*uniform4(prst).x;
+    alpha = 2.0*Pi*uniform4(ranluxcltab).x;
     link[0].x = cos(alpha);
     link[0].y = sin(alpha);
   } else {
@@ -131,7 +144,7 @@ void SU(global cfloat_t *link, int n, ranluxcl_state_t *prst, int gid) {
       }
     for(i=0; i<n-1; i++)
       for(j=i+1; j<n; j++) {
-	v = uniform4(prst);
+	v = uniform4(ranluxcltab);
 	alpha=Pi*v.x;
 	phi=2.0*Pi*v.y;
 	cos_theta=2.0*v.z-1;
@@ -180,17 +193,13 @@ kernel void set_hot(global cfloat_t *U,
 		    global ranluxcl_state_t *ranluxcltab) {
   int gid = get_global_id(0);                                               
   int idx = gid2idx(gid,&bbox);
-  ranluxcl_state_t rst;
-  ranluxcl_download_seed(&rst,ranluxcltab);
   for(int mu=0; mu<d; mu++)
-    SU(U+(idx*d+mu)*n*n,n,&rst,gid);
-  ranluxcl_upload_seed(&rst,ranluxcltab);
-}
+    SU(U+(idx*d+mu)*n*n,n,ranluxcltab,gid);}
 
 
 void heatbath_SU2(cfloat_t *a,
 		  float beta_eff, 
-		  ranluxcl_state_t *prst) {
+		  global ranluxcl_state_t *ranluxcltab) {
   float4 e,r,b;
   float dk, p0;
   cfloat_t u0,u1,u2,u3;
@@ -208,8 +217,8 @@ void heatbath_SU2(cfloat_t *a,
   u3=(cfloat_t)(e.x/dk,e.w/dk);  
   do {
     do {
-      r = uniform4(prst);
-    } while (r.x<0.0001 && r.y<0.0001);
+      r = uniform4(ranluxcltab);
+    } while (r.x*r.y<0.0001);
     r.x = -log(r.x)/p0;
     r.y = -log(r.y)/p0;
     r.z = cos(2.0*Pi*r.z);
@@ -217,7 +226,7 @@ void heatbath_SU2(cfloat_t *a,
     delta = r.y+r.x*r.z;
   } while (r.w*r.w > (1.0-0.5*delta));  
   b.x=1.0-delta;
-  r = uniform4(prst);
+  r = uniform4(ranluxcltab);
   cos_theta=2.0*r.x-1.0;
   sin_theta=sqrt(1.0-cos_theta*cos_theta);
   sin_alpha=sqrt(1-b.x*b.x);
@@ -268,14 +277,11 @@ kernel void heatbath(global cfloat_t *U,
 		     int n_iter,
 		     struct bbox_t bbox,
 		     global ranluxcl_state_t *ranluxcltab) {
-  int gid = get_global_id(0);
+  int gid = get_global_id(0);                                               
   int idx = gid2idx(gid,&bbox);
   size_t ixmu, ik, jk;
   cfloat_t a[4], tmp;  
   cfloat_t staples[MAXN*MAXN];
-
-  ranluxcl_state_t rst;
-  ranluxcl_download_seed(&rst,ranluxcltab);
 
   for(int mu=0; mu<d; mu++) {
     ixmu = (idx*d+mu)*n*n;
@@ -284,7 +290,7 @@ kernel void heatbath(global cfloat_t *U,
     for(int i=0; i<n; i++)
       for(int j=0; j<n; j++)
 	staples[i*n+j]=(cfloat_t)(0.0,0.0);    
-    
+
     //[inject:heatbath_action]
     
     for(int iter=0; iter<n_iter; iter++)
@@ -295,7 +301,7 @@ kernel void heatbath(global cfloat_t *U,
 	  a[2]=(cfloat_t)(0.0,0.0);
 	  a[3]=(cfloat_t)(0.0,0.0);
 	  for(int k=0; k<n; k++) {
-	    
+	    // for debug only: staples[k*n+i]=staples[k*n+j]=1;
 	    a[0] = cfloat_add(a[0],cfloat_mul(U[ixmu+i*n+k],
 					      cfloat_conj(staples[i*n+k])));
 	    a[1] = cfloat_add(a[1],cfloat_mul(U[ixmu+i*n+k],
@@ -304,16 +310,15 @@ kernel void heatbath(global cfloat_t *U,
 					      cfloat_conj(staples[i*n+k])));
 	    a[3] = cfloat_add(a[3],cfloat_mul(U[ixmu+j*n+k],
 					      cfloat_conj(staples[j*n+k])));
-	  }
-	  heatbath_SU2(a,beta/n,&rst);
+	  }	  
+	  heatbath_SU2(a,beta/n,ranluxcltab);
 	  for(int k=0; k<n; k++) {
 	    ik = ixmu+i*n+k;
 	    jk = ixmu+j*n+k;
-	    tmp = cfloat_add(cfloat_mul(a[0],U[ik]),cfloat_mul(a[1],U[jk]));
-	    U[jk] = cfloat_add(cfloat_mul(a[2],U[ik]),cfloat_mul(a[3],U[jk]));
-	    U[ik] = tmp;
+	    tmp=cfloat_add(cfloat_mul(a[0],U[ik]),cfloat_mul(a[1],U[jk]));
+	    U[jk]=cfloat_add(cfloat_mul(a[2],U[ik]),cfloat_mul(a[3],U[jk]));
+	    U[ik]=tmp;
 	  }	  
 	}
   }
-  ranluxcl_upload_seed(&rst,ranluxcltab);
 }

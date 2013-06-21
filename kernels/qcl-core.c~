@@ -32,8 +32,8 @@ inline struct shift_t gid2shift(const size_t gid, const struct bbox_t *bbox) {
   int dd;
   size_t i = gid;
   size_t j;
-  for(int k=0; k<MAXD; k++) {
-    dd = (*bbox).c[k]/(*bbox).f[k];
+  for(int k=MAXD-1; k>=0; k--) {
+    dd = ((*bbox).c[k]-(*bbox).e[k])/(*bbox).f[k];
     j = i % dd;
     shift.s[k] = j*(*bbox).f[k]+(*bbox).e[k];
     i = (i - j) / dd;
