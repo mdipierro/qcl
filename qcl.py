@@ -968,13 +968,8 @@ def opencl_paths(function_name, # name of the generated function
     DEFINE = precision+' %s = ('+precision+')(0.0,0.0);'
     NAME = 'm%.2i'
     CX = '%s_%ix%i'
-    RE = '%s_%ix%i.x'
-    IM = '%s_%ix%i.y'
-    ADD = ' += '
-    PLUS = '+'
-    MINUS = '-'
-    TIMES = '*'
-    EQUAL = ' = '
+    RE, IM = '%s_%ix%i.x', '%s_%ix%i.y'
+    ADD, PLUS, MINUS, TIMES, EQUAL = ' += ', '+', '-', '*', ' = '
     NEWLINE = '\n'+' '*12
     vars = []
     code = []
@@ -1051,12 +1046,8 @@ def opencl_paths(function_name, # name of the generated function
                             var_re = RE % (name,i,j)
                             var_im = IM % (name,i,j)
                             k = 0
-                            line = var_re +EQUAL
-                            line += PLUS+RE % (name1,i,k);
-                            line += TIMES+RE % (name2,k,j);
-                            line += MINUS+IM % (name1,i,k);
-                            line += TIMES+IM % (name2,k,j);
-                            for k in range(1,n):
+                            line = var_re + EQUAL
+                            for k in range(0,n):
                                 line += NEWLINE + ' '*len(var_re +EQUAL)
                                 line += PLUS+RE % (name1,i,k);
                                 line += TIMES+RE % (name2,k,j);
@@ -1065,11 +1056,7 @@ def opencl_paths(function_name, # name of the generated function
                             code.append(line+';')
                             k = 0
                             line = var_im + EQUAL
-                            line += PLUS+RE % (name1,i,k);
-                            line += TIMES+IM % (name2,k,j);
-                            line += PLUS+IM % (name1,i,k);
-                            line += TIMES+RE % (name2,k,j);
-                            for k in range(1,n):
+                            for k in range(0,n):
                                 line += NEWLINE + ' '*len(var_re +EQUAL)
                                 line += PLUS+RE % (name1,i,k);
                                 line += TIMES+IM % (name2,k,j);
@@ -1084,11 +1071,7 @@ def opencl_paths(function_name, # name of the generated function
                             var_im = IM % (name,i,j)
                             k = 0
                             line = var_re + EQUAL
-                            line += PLUS+RE % (name1,i,k);
-                            line += TIMES+RE % (name2,j,k);
-                            line += PLUS+IM % (name1,i,k);
-                            line += TIMES+IM % (name2,j,k);
-                            for k in range(1,n):
+                            for k in range(0,n):
                                 line += NEWLINE + ' '*len(var_re +EQUAL)
                                 line += PLUS+RE % (name1,i,k);
                                 line += TIMES+RE % (name2,j,k);
@@ -1097,11 +1080,7 @@ def opencl_paths(function_name, # name of the generated function
                             code.append(line+';')
                             k = 0
                             line = var_im + EQUAL
-                            line += MINUS+RE % (name1,i,k);
-                            line += TIMES+IM % (name2,j,k);
-                            line += PLUS+IM % (name1,i,k);
-                            line += TIMES+RE % (name2,j,k);
-                            for k in range(1,n):
+                            for k in range(0,n):
                                 line += NEWLINE + ' '*len(var_re +EQUAL)
                                 line += MINUS+RE % (name1,i,k);
                                 line += TIMES+IM % (name2,j,k);
