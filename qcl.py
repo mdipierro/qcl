@@ -20,6 +20,7 @@ import itertools
 import logging
 import random
 import re
+import unittest
 import numpy # types: int8, int16, int32, int64,
              #        float32, float64, complex64, complex128
 
@@ -465,7 +466,7 @@ class Field(object):
                             lattice = self.lattice,
                             coefficients = [1.0 for p in paths],
                             paths=paths,                            
-                            sun = U.data.shape[-1],
+                            nc = U.data.shape[-1],
                             trace = (self.data.shape[-1]==1))
         source = makesource({'paths':code})
         def runner(source,self=self,name=name):
@@ -476,7 +477,7 @@ class Field(object):
             function = getattr(prg,name+'_loop')
             function(self.lattice.comm.queue,(self.lattice.size,),None,
                      out_buffer, U_buffer,
-                     numpy.int32(shape[0]), # 1 for trace, sun for no-trace
+                     numpy.int32(shape[0]), # 1 for trace, nc for no-trace
                      self.lattice.bbox).wait()
             cl.enqueue_copy(self.lattice.comm.queue, self.data, out_buffer).wait()
             return self        
@@ -582,7 +583,7 @@ class GaugeAction(object):
                                  lattice = self.lattice,
                                  coefficients=coefficients,
                                  paths=paths,
-                                 sun = U.data.shape[-1],
+                                 nc = U.data.shape[-1],
                                  trace = (U.data.shape[-1]==1))
         action = opencl_heatbath_action(self.lattice.d,name)
         source = makesource({'paths':code,'heatbath_action':action})
@@ -692,64 +693,53 @@ class Action(object):
 def BiCGStabInverter(phi,psi,action):
     pass
 
-def test_gauge():
-    Nc = 2
-    for N in range(1,30):
-        print N
+
+class TestColdAndHotGauge(unittest.TestCase):
+    def test_cold(self):
+        comm = Communicator()
+        for nc in range(2,4):
+            for N in range(4,8):
+                space = comm.Lattice((N,N,N,N))
+                U = space.Field((4,nc,nc))
+                U.set_cold()
+                U.check_unitarity()
+                self.assertTrue(abs(U.average_plaquette()) > 0.9999)
+    def test_hot(self):
+        comm = Communicator()
+        for nc in range(2,4):
+            for N in range(4,8):
+                space = comm.Lattice((N,N,N,N))
+                U = space.Field((4,nc,nc))
+                U.set_hot()
+                U.check_unitarity()
+                self.assertTrue(abs(U.average_plaquette()) < 0.1)
+
+class TestFieldTypes(unittest.TestCase):
+    def test_fields(self):
+        N, nc = 4, 3
+        parameters = {}
         comm = Communicator()
         space = comm.Lattice((N,N,N,N))
-        U = space.Field((4,Nc,Nc))
-        print 'setting cold'
-        U.set_cold()
-        if N<8: U.check_unitarity()
-        assert abs(U.average_plaquette()) > 0.9999
-        print 'setting hot'
+        U = space.Field((space.d,nc,nc))
         U.set_hot()
-        if N<8: U.check_unitarity()
-        assert abs(U.average_plaquette()) < 0.5
-        print 'done'
+        U.check_unitarity()
+        U.set_cold()    
+        U.check_cold()
+        U.check_unitarity()
+        
+        psi = U.data_component((0,0,0))
+        #Canvas().imshow(numpy.real(psi.data_slice((0,0)))).save()
+        p = space.Site((0,0,0,0))
+        psi = space.Field((space.d,nc))
+        chi = space.Field((space.d,nc))
+        psi[p,1,2] = 0.0 # set component to zezo
+        phi = space.Field(1).set_link_product(U,[(1,2,-1,-2),(2,4,-2,-4)]).run()
+        self.assertTrue(phi.sum() == 4**4 * 3*2)
 
-def test_gauge2():
-    """ using test_custom to figure out lattice layout """
-    N, Nc = 2, 2
-    comm = Communicator()
-    space = comm.Lattice((N,N,N,N))
-    U = space.Field((space.d,Nc,Nc))
-    U.set_custom()
-    print U.average_plaquette()
-
-def test_lattice_fields():
-    N = int(sys.argv[1]) if len(sys.argv)>1 else 4
-    parameters = {}
-    comm = Communicator()
-    space = comm.Lattice((N,N,N,N))
-
-    U = space.Field((4,3,3))
-    t0 = time.time()
-    U.set_hot()
-    psi = U.data_component((0,0,0))
-    Canvas().imshow(numpy.real(psi.data_slice((0,0)))).save()
-
-    print 'hot',time.time()-t0
-    if N<8: U.check_unitarity()
-    t0 = time.time()
-    U.set_cold()    
-    print 'cold',time.time()-t0
-    if N<8: U.check_cold()
-    if N<8: U.check_unitarity()
-    
-    p = space.Site((0,0,0,0))
-    psi = space.Field((4,3))
-    chi = space.Field((4,3))
-    psi[p,1,2] = 0.0 # set component to zezo
-
-    phi = space.Field(1).set_link_product(U,[(1,2,-1,-2),(2,4,-2,-4)]).run()
-    assert phi.sum() == 4**4 * 3*2
-
-    old = U.sum()
-    U.save('test.npy')
-    U.load('test.npy')
-    assert U.sum() == old
+        old = U.sum()
+        #U.save('test.npy')
+        #U.load('test.npy')
+        self.assertTrue(U.sum() == old)
 
 # ###########################################################
 # Part II, paths and symmetries
@@ -849,14 +839,27 @@ def derive_paths(paths,mu,bidirectional=False):
         dpaths+=derive_path(path,mu,bidirectional)
     return dpaths
 
-def test_paths():
-    path = (+1,+2,-1,-2)
-    paths = bc_symmetrize(path,d=4)
-    print paths
-    paths = remove_duplicates(paths,bidirectional=True)
-    print paths
-    staples = derive_paths(paths,+1,bidirectional=True)
-    print staples
+class TestPaths(unittest.TestCase):
+    def test_paths(self):
+        path = (+1,+2,-1,-2)
+        paths = bc_symmetrize(path,d=4)
+        self.assertTrue(paths == 
+                        [(2, 1, -2, -1), (3, 1, -3, -1), (4, 1, -4, -1), (-2, 1, 2, -1), (-3, 1, 3, -1),
+                         (-4, 1, 4, -1), (1, 2, -1, -2), (3, 2, -3, -2), (4, 2, -4, -2), (-1, 2, 1, -2),
+                         (-3, 2, 3, -2), (-4, 2, 4, -2), (1, 3, -1, -3), (2, 3, -2, -3), (4, 3, -4, -3),
+                         (-1, 3, 1, -3), (-2, 3, 2, -3), (-4, 3, 4, -3), (1, 4, -1, -4), (2, 4, -2, -4),
+                         (3, 4, -3, -4), (-1, 4, 1, -4), (-2, 4, 2, -4), (-3, 4, 3, -4), (2, -1, -2, 1),
+                         (3, -1, -3, 1), (4, -1, -4, 1), (-2, -1, 2, 1), (-3, -1, 3, 1), (-4, -1, 4, 1),
+                         (1, -2, -1, 2), (3, -2, -3, 2), (4, -2, -4, 2), (-1, -2, 1, 2), (-3, -2, 3, 2),
+                         (-4, -2, 4, 2), (1, -3, -1, 3), (2, -3, -2, 3), (4, -3, -4, 3), (-1, -3, 1, 3),
+                         (-2, -3, 2, 3), (-4, -3, 4, 3), (1, -4, -1, 4), (2, -4, -2, 4), (3, -4, -3, 4),
+                         (-1, -4, 1, 4), (-2, -4, 2, 4), (-3, -4, 3, 4)])
+        paths = remove_duplicates(paths,bidirectional=True)
+        self.assertTrue(paths == [(4, 1, -4, -1), (4, 3, -4, -3), (2, 1, -2, -1),
+                                  (3, 2, -3, -2), (3, 1, -3, -1), (4, 2, -4, -2)])
+        staples = derive_paths(paths,+1,bidirectional=True)
+        self.assertTrue(staples == [(-4, -1, 4), (4, -1, -4), (-2, -1, 2), 
+                                    (2, -1, -2), (-3, -1, 3), (3, -1, -3)])
 
 
 def minimum_spanning_graph(paths,bidirectional=True):
@@ -939,7 +942,7 @@ def opencl_paths(function_name, # name of the generated function
                  lattice, # lattice on which paths are generated
                  paths, # list of paths
                  coefficients, # complex numbers storing coefficents of paths
-                 sun, # SU(n) gauge group
+                 nc, # SU(n) gauge group
                  precision = 'cfloat_t', # float or double precision
                  initialize = False,
                  trace = False): # result is to be traced
@@ -977,7 +980,7 @@ def opencl_paths(function_name, # name of the generated function
     code = []
     matrices = {}
     d = len(lattice.dims)
-    n = sun
+    n = nc
     site = lattice.Site(tuple(0 for i in lattice.dims))
     vars.append('unsigned long ixmu;')
     if initialize:
@@ -1165,80 +1168,57 @@ def opencl_heatbath_action(d,name):
 
 ### rewrite below here
 
-def test_kernel(comm,kernel_code,name,U):
-    ### fix this, there need to be a parallel loop over sites
-    u_buffer = cl.Buffer(comm.ctx, comm.mf.READ_ONLY | comm.mf.COPY_HOST_PTR,
-                         hostbuf=U.data)
-    out_buffer = cl.Buffer(comm.ctx, comm.mf.WRITE_ONLY, 256) ### FIX NBYTES
-    idx_buffer = cl.Buffer(comm.ctx, comm.mf.READ_ONLY, 32) # should not be
-    core = open('kernels/qcl-core.c').read()
-    prg = cl.Program(comm.ctx,core + kernel_code).build(
-        options=['-I',INCLUDE_PATH])
-    # getattr(prg,name)(comm.queue,(4,4,4),None,out_buffer,u_buffer,idx_buffer)
+class TestPathKernels(unittest.TestCase):
 
-def test_opencl_paths():
-    sun = 2
-    comm = Communicator()
-    space = comm.Lattice((4,4,4,4))
-    U = space.Field((4,sun,sun))
-    #paths = bc_symmetrize((+1,+2,-1,-2))
-    #paths = remove_duplicates(paths,bidirectional=True)
-    #paths = derive_paths(paths,1,bidirectional=True)
-    paths = [(+1,+2,+3,-1,-2,-3)]
-    kernel_code = opencl_paths(function_name='staples',
-                               lattice=space,
-                               paths=paths,
-                               coefficients = [1.0 for p in paths],
-                               sun=sun,
-                               trace=False)
-    print kernel_code
-    test_kernel(comm,kernel_code,'staples',U)
+    def make_kernel(self,comm,kernel_code,name,U):
+        ### fix this, there need to be a parallel loop over sites
+        u_buffer = cl.Buffer(comm.ctx, comm.mf.READ_ONLY | comm.mf.COPY_HOST_PTR,
+                             hostbuf=U.data)
+        out_buffer = cl.Buffer(comm.ctx, comm.mf.WRITE_ONLY, 256) ### FIX NBYTES
+        idx_buffer = cl.Buffer(comm.ctx, comm.mf.READ_ONLY, 32) # should not be
+        core = open('kernels/qcl-core.c').read()
+        prg = cl.Program(comm.ctx,core + kernel_code).build(
+            options=['-I',INCLUDE_PATH])
+        # getattr(prg,name)(comm.queue,(4,4,4),None,out_buffer,u_buffer,idx_buffer)
 
-def test_something():
-    comm = Communicator()
-    space = comm.Lattice((4,4))
-    U = space.Field((space.d,2,2))
-    for k in range(1000):
-        print k
-        U.set_hot()
-    
+    def test_opencl_paths(self):
+        N, nc = 4, 3
+        comm = Communicator()
+        space = comm.Lattice((N,N,N,N))
+        U = space.Field((space.d,nc,nc))
+        paths = [(+1,+2,+3,-1,-2,-3)]
+        kernel_code = opencl_paths(function_name='staples',
+                                   lattice=space,
+                                   paths=paths,
+                                   coefficients = [1.0 for p in paths],
+                                   nc=nc,
+                                   trace=False)
+        self.make_kernel(comm,kernel_code,'staples',U)
 
-def test_heatbath():
-    N = 4
-    Nc = 3
-    comm = Communicator()
-    space = comm.Lattice((N,N,N,N))
-    U = space.Field((space.d,Nc,Nc))
-    U.set_cold()
-    print '<plq> = ',U.average_plaquette()
-    wilson = GaugeAction(space)
-    wilson.add_term(1.0,(1,2,-1,-2))
-    code = wilson.heatbath(U,beta=4.0)
-    # print code.source
-    avg_plq = 0.0
-    for k in range(10000):
-        code.run()        
-        plq = U.average_plaquette()
-        avg_plq = (avg_plq * k + plq)/(k+1)
-        print '<plaq> =', plq, '<avg> =', avg_plq
-        if N<8:
-            U.check_unitarity(output=False)
-        if len(space.dims) == 4 and N==12:
-            psi = U.data_component((0,0,0))
-            Canvas().imshow(numpy.real(psi.data_slice((0,0)))).save()
-    print 'done!'
-
+class TestHeatbath(unittest.TestCase):
+    def test_heatbath(self):
+        N, nc = 4, 3
+        comm = Communicator()
+        space = comm.Lattice((N,N,N,N))
+        U = space.Field((space.d,nc,nc))
+        U.set_cold()    
+        wilson = GaugeAction(space)
+        wilson.add_term(1.0,(1,2,-1,-2))
+        code = wilson.heatbath(U,beta=4.0)
+        # print code.source
+        avg_plq = 0.0
+        for k in range(200):
+            code.run()        
+            plq = U.average_plaquette()
+            avg_plq = (avg_plq * k + plq)/(k+1)
+            if DEBUG:
+                print '<plaq> =', plq, '<avg> =', avg_plq
+                U.check_unitarity(output=False)
+        self.assertTrue( 0.29 < abs(avg_plq) < 0.3 )
 
 
 if __name__=='__main__':
-    #test_gauge()
-    #test_gauge2()
-    #test_paths()
-    #test_lattice_fields()
-    #test_opencl_paths()
-    test_heatbath()
-    #test_something()
-    pass
+    unittest.main()
 
 
 
