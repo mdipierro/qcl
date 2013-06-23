@@ -107,23 +107,27 @@ class Canvas(object):
 ##
 
 def random_name():
+    """ 
+    Auxiliary function user to create a random sequence of alphanumeric characters
+    It is user to generate function names
+    """
     chars = 'abcdefghijklmonopqrstuvwxyz'
     return ''.join(random.choice(chars) for i in range(5))
 
 def identity(n):
-    """ returns an identity matrix nxn """
+    """ Returns an identity matrix n x n """
     return numpy.eye(n)
 
 def hermitian(U):
-    """ returns the hermitian of the U matrix """
+    """ Returns the hermitian of the U matrix """
     return numpy.transpose(U).conj()
 
 def is_unitary(U,precision=1e-4):
-    """ checks if U is unitary within precision """
+    """ Checks if U is unitary within precision """
     return numpy.all(abs(U*hermitian(U)-identity(U.shape[0]))<precision)
 
 def product(a):
-    """ auxiliary function computes product of a items """
+    """ Auxiliary function computes product of a items """
     return 1 if not a else reduce(operator.mul,a)
 
 # ###########################################################
@@ -131,7 +135,7 @@ def product(a):
 # ###########################################################
 
 def listify(items):
-    """ turns a tuple or single integer into a list """
+    """ Turns a tuple or single integer into a list """
     if isinstance(items,(int,long)):
         return [items]
     elif isinstance(items,tuple):
@@ -142,7 +146,7 @@ def listify(items):
         raise ValueError, "expected a list"
 
 def makesource(vars=None,filename='kernels/qcl-core.c'):
-    """ loads and compiles a kernel """
+    """ Loads and compiles a kernel """
     source = open(filename).read()
     for key,value in (vars or {}).items():
         source = source.replace('//[inject:%s]'%key,value)        
@@ -163,11 +167,11 @@ def makesource(vars=None,filename='kernels/qcl-core.c'):
 
 class Communicator(object):
     """
-    abstracts MPI as well as communications to OpenCL devices
+    Abstracts MPI as well as communications to OpenCL devices
     it assumes one process per opencl device and creates the
     ctx and queue for that device
 
-    currently only supports one device.
+    Currently only supports one device. The plan is to support more.
     """
     def __init__(self):
         if not cl:
@@ -179,26 +183,29 @@ class Communicator(object):
         self.rank = 0
         self.nodes = 1
     def buffer(self,t,hostbuf):
-        """ make a new opencl buffer """
+        """ Makes a new opencl buffer """
         s = {'r': self.mf.READ_ONLY | self.mf.COPY_HOST_PTR,
              'w': self.mf.WRITE_ONLY | self.mf.COPY_HOST_PTR,
              'rw': self.mf.READ_WRITE | self.mf.COPY_HOST_PTR,
              'wr': self.mf.READ_WRITE | self.mf.COPY_HOST_PTR}[t]
         return cl.Buffer(self.ctx,s,hostbuf=hostbuf)
     def compile(self,source):
-        """ compiles a kernel """
+        """ Compiles a kernel """
         return cl.Program(self.ctx,source).build(options=['-I',INCLUDE_PATH])
     def add(self,value):
-        """ mpi add """
+        """ MPI add """
         if not IGNORE_NOT_IMPLEMENTED: raise NotImplementedError
     def send(self,dest,data):
-        """ mpi send """
+        """ MPI send """
         if not IGNORE_NOT_IMPLEMENTED: raise NotImplementedError
     def recv(self,source,data):
-        """ mpi recv """
+        """ MPI recv """
         if not IGNORE_NOT_IMPLEMENTED: raise NotImplementedError
     def Lattice(self,dims,bboxs=None):
-        """ create a new lattice that lives on the device """
+        """ 
+        Creates a new lattice that lives on the device 
+        dims is a tuple with the dimensions of the site tensor.
+        """
         return Lattice(self,dims,bboxs)
 
 
@@ -206,8 +213,8 @@ class Lattice(object):
     """ a lattice encodes info about volume and parallelization """
     def __init__(self,comm,dims,bboxs=None):
         """
-        constructor of a Lattice
-        it computes the size and allocaltes local ranlux prng on device
+        Constructor of a Lattice
+        It computes the size and allocaltes local ranlux prng on device
         """
         self.comm = comm
         self.dims = listify(dims)
@@ -222,6 +229,7 @@ class Lattice(object):
         self._bbox_init()
     ### bbox stuff
     def _bbox_init(self):
+        """ Initalizes the size of the lattice partition hosted on device """
         for i,x in enumerate(self.dims):
             self.bbox[i]=0 # global coordinates if the start of bbox
             self.bbox[i+MAXD]=0 # top padding size
@@ -257,7 +265,10 @@ class Lattice(object):
     ### end bbox stuff
 
     def prng_on(self,seed):
-        """ initialize the parallel random number generator """
+        """ 
+        Initializes the parallel random number generator 
+        It currently uses ranlux, the Lusher's generator which comes with pyOpenCL
+        """
         self.seed = seed
         STATE_SIZE = 112
         self.prngstate = numpy.zeros(self.size*STATE_SIZE,dtype=numpy.float32)
@@ -266,19 +277,19 @@ class Lattice(object):
         prg.init_ranlux(self.comm.queue,(self.size,),None,
                         numpy.uint32(seed),self.prngstate_buffer)
     def prng_get(self):
-        """ retrieves the state of the prng """
+        """ Retrieves the state of the prng from device """
         cl.enqueue_copy(self.comm.queue, self.prngstate, self.prngstate_buffer).wait()
     def prng_off(self):
-        """ disabled the prng """
+        """ Disabled the prng on device"""
         self.prngstate = self.prngstate_buffer = None
     def coords2global(self,coords):
-        """ converts (t,x,y,z) coordinates into global index """
+        """ Converts (t,x,y,z) coordinates into global index """
         if len(coords)!=len(self.dims):
             raise RuntimeError, "invalid conversion"
         return sum(p*product(self.dims[i+1:]) \
                        for i,p in enumerate(coords))
     def global2coords(self,i):
-        """ converts global index into (t,x,y,z) """
+        """ Converts global index into (t,x,y,z) """
         coords = []
         for k in reversed(self.dims):
             i,reminder = divmod(i,k)
@@ -288,21 +299,36 @@ class Lattice(object):
         for i in range(self.size):
             assert self.coords2global(self.global2coords(i)) == i
     def Site(self,coords):
-        """ returns a Site constructor for this lattice """
+        """ Returns a Site constructor for this lattice """
         return Site(self,coords)
     def Field(self,siteshape,dtype=numpy.complex64):
-        """ returns a Field constructor for this """
+        """ Returns a Field constructor for this """
         return Field(self,siteshape,dtype)
 
 
 class Site(object):
-    """ a site object stores information about a lattice site """
+    """ The site object stores information about a lattice site """
     def __init__(self,lattice,coords):
         self.lattice = lattice
         self.coords = tuple(coords)
         self.gl_idx = self.lattice.coords2global(coords)
         self.lo_idx = self.gl_idx ### until something better
     def __add__(self,mu):
+        """
+        Example:
+        >>> lattice = Lattice((4,4,4,4))
+        >>> p = Site(lattice,(0,0,0,0)
+        >>> q = p + 1
+        >>> assert p.coords == (0,1,0,0)
+        >>> q = p + 2
+        >>> assert p.coords == (0,0,1,0)
+        >>> q = p + 3
+        >>> assert p.coords == (0,0,0,1)
+        >>> q = p + 4
+        >>> assert x.coords == (1,0,0,0)
+        >>> q = p + (-4)
+        >>> assert x.coords == (3,0,0,0)
+        """
         if mu<0:
             return self.__sub__(-mu)
         mu = mu % self.lattice.d
@@ -311,6 +337,11 @@ class Site(object):
                        for nu,c in enumerate(self.coords))
         return self.lattice.Site(coords)
     def __sub__(self,mu):
+        """
+        >>> q = p - mu
+        same as
+        >>> q = p + (-mu)
+        """
         if mu<0:
             return self.__add__(-mu)
         mu = mu % self.lattice.d
@@ -322,6 +353,7 @@ class Site(object):
         return str(self.coords)
 
 class Op(object):
+    """ For lazy evaluation of expressions """
     def __init__(self,op,left,right=None):
         self.op = op
         self.left = left
@@ -329,10 +361,16 @@ class Op(object):
 
 class Field(object):
     """
-    a field can be used to store a guage field, a fermion field,
+    A field can be used to store a guage field, a fermion field,
     a staggered field, etc
-    no math operations between fields here except for O(n) operations,
+    Mo math operations between fields here except for O(n) operations,
     the others MUST be done in OpenCL only!
+
+    Example:
+    >>> lattice = Lattice((4,4,4,4))
+    >>> phi = Field(lattice,(4,3),dtype=numpy.complex64)
+
+    dtype=numpy.complex64 is the default and some algorithms rely on this value.
     """
     def __init__(self, lattice, siteshape, dtype=numpy.complex64):
         self.lattice = lattice
@@ -345,7 +383,9 @@ class Field(object):
             print 'allocating %sbytes' % int(self.lattice.size*self.sitesize*8)
     def copy(self,other):
         """
-        a.copy(b) # makes a copy of field b into field a.
+        Makes a copy of field b into field a
+        Exmaple:        
+        >>> a.copy(b) 
         """
         if not (self.lattice == self.lattice and
                 self.siteshape==other.siteshape and
@@ -354,13 +394,20 @@ class Field(object):
         self.dtype = other.dtype
         self.data[:] = other.data
     def data_component(self,component):
+        """
+        Returns a new field containing a given component of the current field 
+        Example:
+        >>> phi = Field(lattice,(4,3))
+        >>> psi00 = phi.data_component((0,0))
+        """
+        
         newfield = self.lattice.Field((1,))
         for i in xrange(self.lattice.size):
             newfield.data[i] = self.data[i][component]
         return newfield
     def data_slice(self,slice_coords):
         """
-        returns a numpy slice of the current self.data at coordinates c
+        Returns a numpy slice of the current self.data at coordinates c
         """
         if self.sitesize!=1: raise NotImplementedError
         d = self.lattice.dims[len(slice_coords):]
@@ -391,7 +438,7 @@ class Field(object):
             self.data -= other
         return self
     def __rmul__(self,other):
-        """ maps a += c*b into a.add_scaled(c,b) for a,b arrays """
+        """ Maps a += c*b into a.add_scaled(c,b) for a,b arrays """
         return Op('*',other,self)
     def add_scaled(self,scale,other,n=1000000):
         """ a.add_scaled(c,b) is the same as a[:]=c*b[:] """
@@ -402,8 +449,8 @@ class Field(object):
         return self
     def __mul__(self,other):
         """
-        computes scalar product of two Fields
-        it first re-shape them into 1D arrays, then computes product
+        Computes scalar product of two Fields
+        It first re-shape them into 1D arrays, then computes product
         Not designed to work in parallel (yet)
         """
         if self.lattice.parallel: raise NotImplementedError
@@ -411,18 +458,18 @@ class Field(object):
         f = numpy.vdot if self.dtype in COMPLEX_TYPES else numpy.dot
         return f(self.data,other.data)
     def __getitem__(self,args):
-        """ do not use these to implement algorithms - too slow """
+        """ Do not use these to implement algorithms - too slow """
         site, args = args[0], args[1:]
         return self.data[(site.lo_idx,)+args]
     def __setitem__(self,args,value):
-        """ do not use these to implement algorithms - too slow """
+        """ Do not use these to implement algorithms - too slow """
         site, args = args[0], args[1:]
         self.data[(site.lo_idx,)+args] = value
     def sum(self,*a,**b):
         """ a.sum() computes the sum of terms in a """
         return numpy.sum(self.data,*a,**b)
     def load(self,filename):
-        """ loads the field """
+        """ Loads the field using the numpy binary format (fails on Mac) """
         format = filename.split('.')[-1].lower()
         if format == 'npy':
             self.data = None
@@ -431,7 +478,7 @@ class Field(object):
             raise NotImplementedError
         return self
     def save(self,filename):
-        """ saves the field """
+        """ Saves the field supports *.npy and *.vtk (for 4 only)"""
         format = filename.split('.')[-1].lower()
         if format == 'npy':
             numpy.save(filename,self.data)            
@@ -456,11 +503,17 @@ class Field(object):
             raise NotImplementedError
         return self
     def sync(self,filename):
-        """ uses commuicator to sync devices """
+        """ Syncronizes all buffers in multi-device environment (not implrmented) """
         if not IGNORE_NOT_IMPLEMENTED: raise NotImplementedError
         return self
 
     def set_link_product(self,U,paths,trace=True,name='aux'):
+        """
+        Generates a kernel to set the field to the sum of specified product of links
+        If trace == True the product of links is traced.
+        name is the name of the generate OpenCL function which performs the 
+        product of links.
+        """
         name = name or random_name()
         code = opencl_paths(function_name = name,
                             lattice = self.lattice,
@@ -484,7 +537,7 @@ class Field(object):
         return Code(source,runner)
 
     def set_cold(self):
-        """ uses a kernel to set all links to cold """
+        """ Uses a kernel to set all links to cold """
         shape = self.siteshape
         if not (len(shape)==3 and shape[1]==shape[2]): raise RuntimeError
         data_buffer = self.lattice.comm.buffer('w',self.data)
@@ -495,7 +548,7 @@ class Field(object):
         cl.enqueue_copy(self.lattice.comm.queue, self.data, data_buffer).wait()
 
     def set_custom(self):
-        """ uses a kernel to set all links to cold """
+        """ Uses a kernel to set all links to come cutsom values, for testing only """
         shape = self.siteshape
         if not (len(shape)==3 and shape[1]==shape[2]): raise RuntimeError
         data_buffer = self.lattice.comm.buffer('w',self.data)
@@ -506,13 +559,17 @@ class Field(object):
         cl.enqueue_copy(self.lattice.comm.queue, self.data, data_buffer).wait()
 
     def check_cold(self):
+        """ Checks if the field is a cold gauge configuration """
         for idx in xrange(self.lattice.size):
             for mu in xrange(self.siteshape[0]):
                 for i in xrange(self.siteshape[1]):
                     for j in xrange(self.siteshape[2]):
                         assert(self.data[idx,mu,i,j]==(1 if i==j else 0))
     def set_hot(self):
-        """ uses a kernel to set all links to cold """
+        """
+        Uses a kernel to set all links to hot (random SU(n))
+        Based on Cabibbo-Marinari
+        """
         shape = self.siteshape
         if not (len(shape)==3 and shape[1]==shape[2]): raise RuntimeError
         data_buffer = self.lattice.comm.buffer('w',self.data)
@@ -523,6 +580,10 @@ class Field(object):
         cl.enqueue_copy(self.lattice.comm.queue, self.data, data_buffer).wait()
 
     def check_unitarity(self,output=DEBUG):
+        """
+        Check that all matrices in the current field (assimung gauge config)
+        are unitary. Prints the matrices which are not and raises an Exception.
+        """
         fail = False
         for idx in xrange(self.lattice.size):
             for mu in xrange(self.siteshape[0]):
@@ -544,9 +605,14 @@ class Field(object):
                         print U*hermitian(U), 'FAIL!'
             raise RuntimeError, "U is not unitary"
 
-    def average_plaquette(self,shape=(1,2,-1,-2)):
-        paths = bc_symmetrize(shape,d=self.lattice.d,positive_only=True)
-        paths = remove_duplicates(paths,bidirectional=True)        
+    def average_plaquette(self,shape=(1,2,-1,-2),paths=None):
+        """
+        Compute the average plaquette using paths =  symmetrized (shape)
+        One can specify paths to override symmetrization.
+        """
+        if not paths:
+            paths = bc_symmetrize(shape,d=self.lattice.d,positive_only=True)
+            paths = remove_duplicates(paths,bidirectional=True)        
         # print 'average_plaquette.paths=',paths        
         code = self.lattice.Field(1).set_link_product(self,paths)
         phi=code.run()
@@ -555,10 +621,18 @@ class Field(object):
         return phi.sum()/(self.lattice.size*len(paths)*self.siteshape[-1])
 
 class GaugeAction(object):
+    """
+    Class to store paths and coefficients relative to any gauge action
+    """
     def __init__(self,lattice):
         self.lattice = lattice
         self.terms = []
     def add_term(self,coefficient,paths):
+        """
+        Paths are symmetrized. For example: 
+        >>> wilson = GaugeAction(lattice).add_term(1.0,paths = (1,2,-1,-2)) 
+        is the Wilson action.
+        """
         if isinstance(paths,tuple):
             paths = bc_symmetrize(paths,d=self.lattice.d)
             paths = remove_duplicates(paths,bidirectional=False)
@@ -567,7 +641,12 @@ class GaugeAction(object):
         self.terms.append((coefficient,paths))
         return self
     def heatbath(self,U,beta,n_iter=1,name='aux'):
-        """ uses a kernel to set all links to cold """
+        """
+        Generates a kernel which performs the SU(n) heatbath.
+        Example:
+        >>> wilson = GaugeAction(lattice).add_term(1.0,paths = (1,2,-1,-2)) 
+        >>> wilson.heatbath(beta,n_iter=10)
+        """
         name = name or random_name()
         code = ''
         displacement = 1
@@ -614,9 +693,12 @@ class GaugeAction(object):
         return Code(source,runner)
 
 class Gamma(object):
+    """
+    Container of Gamma matrices
+    """
     def __init__(self,representation='fermilab'):
         """
-        representation can be 'fermiqcd','ukqcd','milc' or 'chiral'
+        Supported representation are be 'fermiqcd','ukqcd','milc' or 'chiral'
         """
         if representation == "dummy":
             gammas = [[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],
@@ -654,6 +736,9 @@ class Gamma(object):
         return self.matrices[mu]
 
 class Lambda(object):
+    """
+    Container of Sigma and Lambda matrices (generators of SU(N))
+    """
     def __init__(self,n):
         """
         for n==2 produces sigma matrices
@@ -685,62 +770,16 @@ class Lambda(object):
         return self.matrices[i]
 
 
-
 class Action(object):
+    """
+    Container for an arbitrary action, to be used for HMC, etc. (not implemented)
+    """
     def __init__(self,U,parameters):
         pass
 
 def BiCGStabInverter(phi,psi,action):
     pass
 
-
-class TestColdAndHotGauge(unittest.TestCase):
-    def test_cold(self):
-        comm = Communicator()
-        for nc in range(2,4):
-            for N in range(4,8):
-                space = comm.Lattice((N,N,N,N))
-                U = space.Field((4,nc,nc))
-                U.set_cold()
-                U.check_unitarity()
-                self.assertTrue(abs(U.average_plaquette()) > 0.9999)
-    def test_hot(self):
-        comm = Communicator()
-        for nc in range(2,4):
-            for N in range(4,8):
-                space = comm.Lattice((N,N,N,N))
-                U = space.Field((4,nc,nc))
-                U.set_hot()
-                U.check_unitarity()
-                self.assertTrue(abs(U.average_plaquette()) < 0.1)
-
-class TestFieldTypes(unittest.TestCase):
-    def test_fields(self):
-        N, nc = 4, 3
-        parameters = {}
-        comm = Communicator()
-        space = comm.Lattice((N,N,N,N))
-        U = space.Field((space.d,nc,nc))
-        U.set_hot()
-        U.check_unitarity()
-        U.set_cold()    
-        U.check_cold()
-        U.check_unitarity()
-        
-        psi = U.data_component((0,0,0))
-        #Canvas().imshow(numpy.real(psi.data_slice((0,0)))).save()
-        p = space.Site((0,0,0,0))
-        psi = space.Field((space.d,nc))
-        chi = space.Field((space.d,nc))
-        psi[p,1,2] = 0.0 # set component to zezo
-        phi = space.Field(1).set_link_product(U,[(1,2,-1,-2),(2,4,-2,-4)]).run()
-        self.assertTrue(phi.sum() == 4**4 * 3*2)
-        old = U.sum()
-        U.save('test.npy')
-        try:
-            U.load('test.npy')
-            self.assertTrue(U.sum() == old)
-        except AssertionError: pass # not sure why but on Max load raises AssetionError
 
 # ###########################################################
 # Part II, paths and symmetries
@@ -818,8 +857,8 @@ def range_path(path):
 
 def derive_path(path,mu,bidirectional=False):
     """
-    computes the derivative of path respect to link mu.
-    if bidirecional path, it also derives the reverse path
+    Computes the derivative of path respect to link mu.
+    If bidirecional path, it also derives the reverse path
     """
     dpaths = []
     for i,nu in enumerate(path):
@@ -832,35 +871,13 @@ def derive_path(path,mu,bidirectional=False):
 
 def derive_paths(paths,mu,bidirectional=False):
     """
-    computes the derivative of all paths respect to link mu.
-    if bidirecional path, it also derives the reverse of each path
+    Computes the derivative of all paths respect to link mu.
+    If bidirecional path, it also derives the reverse of each path
     """
     dpaths = []
     for path in paths:
         dpaths+=derive_path(path,mu,bidirectional)
     return dpaths
-
-class TestPaths(unittest.TestCase):
-    def test_paths(self):
-        path = (+1,+2,-1,-2)
-        paths = bc_symmetrize(path,d=4)
-        self.assertTrue(paths == 
-                        [(2, 1, -2, -1), (3, 1, -3, -1), (4, 1, -4, -1), (-2, 1, 2, -1), (-3, 1, 3, -1),
-                         (-4, 1, 4, -1), (1, 2, -1, -2), (3, 2, -3, -2), (4, 2, -4, -2), (-1, 2, 1, -2),
-                         (-3, 2, 3, -2), (-4, 2, 4, -2), (1, 3, -1, -3), (2, 3, -2, -3), (4, 3, -4, -3),
-                         (-1, 3, 1, -3), (-2, 3, 2, -3), (-4, 3, 4, -3), (1, 4, -1, -4), (2, 4, -2, -4),
-                         (3, 4, -3, -4), (-1, 4, 1, -4), (-2, 4, 2, -4), (-3, 4, 3, -4), (2, -1, -2, 1),
-                         (3, -1, -3, 1), (4, -1, -4, 1), (-2, -1, 2, 1), (-3, -1, 3, 1), (-4, -1, 4, 1),
-                         (1, -2, -1, 2), (3, -2, -3, 2), (4, -2, -4, 2), (-1, -2, 1, 2), (-3, -2, 3, 2),
-                         (-4, -2, 4, 2), (1, -3, -1, 3), (2, -3, -2, 3), (4, -3, -4, 3), (-1, -3, 1, 3),
-                         (-2, -3, 2, 3), (-4, -3, 4, 3), (1, -4, -1, 4), (2, -4, -2, 4), (3, -4, -3, 4),
-                         (-1, -4, 1, 4), (-2, -4, 2, 4), (-3, -4, 3, 4)])
-        paths = remove_duplicates(paths,bidirectional=True)
-        self.assertTrue(paths == [(4, 1, -4, -1), (4, 3, -4, -3), (2, 1, -2, -1),
-                                  (3, 2, -3, -2), (3, 1, -3, -1), (4, 2, -4, -2)])
-        staples = derive_paths(paths,+1,bidirectional=True)
-        self.assertTrue(staples == [(-4, -1, 4), (4, -1, -4), (-2, -1, 2), 
-                                    (2, -1, -2), (-3, -1, 3), (3, -1, -3)])
 
 
 def minimum_spanning_graph(paths,bidirectional=True):
@@ -1146,7 +1163,81 @@ def opencl_paths(function_name, # name of the generated function
 def opencl_heatbath_action(d,name):    
     return '\n'.join('if(mu==%i) %s%i(staples,U,idx,&bbox);' % (i,name,i) for i in range(d))
 
-### rewrite below here
+
+# ###########################################################
+# Tests
+# ###########################################################
+
+class TestColdAndHotGauge(unittest.TestCase):
+    def test_cold(self):
+        comm = Communicator()
+        for nc in range(2,4):
+            for N in range(4,8):
+                space = comm.Lattice((N,N,N,N))
+                U = space.Field((4,nc,nc))
+                U.set_cold()
+                U.check_unitarity()
+                self.assertTrue(abs(U.average_plaquette()) > 0.9999)
+    def test_hot(self):
+        comm = Communicator()
+        for nc in range(2,4):
+            for N in range(4,8):
+                space = comm.Lattice((N,N,N,N))
+                U = space.Field((4,nc,nc))
+                U.set_hot()
+                U.check_unitarity()
+                self.assertTrue(abs(U.average_plaquette()) < 0.1)
+
+class TestFieldTypes(unittest.TestCase):
+    def test_fields(self):
+        N, nc = 4, 3
+        parameters = {}
+        comm = Communicator()
+        space = comm.Lattice((N,N,N,N))
+        U = space.Field((space.d,nc,nc))
+        U.set_hot()
+        U.check_unitarity()
+        U.set_cold()    
+        U.check_cold()
+        U.check_unitarity()
+        
+        psi = U.data_component((0,0,0))
+        #Canvas().imshow(numpy.real(psi.data_slice((0,0)))).save()
+        p = space.Site((0,0,0,0))
+        psi = space.Field((space.d,nc))
+        chi = space.Field((space.d,nc))
+        psi[p,1,2] = 0.0 # set component to zezo
+        phi = space.Field(1).set_link_product(U,[(1,2,-1,-2),(2,4,-2,-4)]).run()
+        self.assertTrue(phi.sum() == 4**4 * 3*2)
+        old = U.sum()
+        U.save('test.npy')
+        try:
+            U.load('test.npy')
+            self.assertTrue(U.sum() == old)
+        except AssertionError: pass # not sure why but on Max load raises AssetionError
+
+class TestPaths(unittest.TestCase):
+    def test_paths(self):
+        path = (+1,+2,-1,-2)
+        paths = bc_symmetrize(path,d=4)
+        self.assertTrue(paths == 
+                        [(2, 1, -2, -1), (3, 1, -3, -1), (4, 1, -4, -1), (-2, 1, 2, -1), (-3, 1, 3, -1),
+                         (-4, 1, 4, -1), (1, 2, -1, -2), (3, 2, -3, -2), (4, 2, -4, -2), (-1, 2, 1, -2),
+                         (-3, 2, 3, -2), (-4, 2, 4, -2), (1, 3, -1, -3), (2, 3, -2, -3), (4, 3, -4, -3),
+                         (-1, 3, 1, -3), (-2, 3, 2, -3), (-4, 3, 4, -3), (1, 4, -1, -4), (2, 4, -2, -4),
+                         (3, 4, -3, -4), (-1, 4, 1, -4), (-2, 4, 2, -4), (-3, 4, 3, -4), (2, -1, -2, 1),
+                         (3, -1, -3, 1), (4, -1, -4, 1), (-2, -1, 2, 1), (-3, -1, 3, 1), (-4, -1, 4, 1),
+                         (1, -2, -1, 2), (3, -2, -3, 2), (4, -2, -4, 2), (-1, -2, 1, 2), (-3, -2, 3, 2),
+                         (-4, -2, 4, 2), (1, -3, -1, 3), (2, -3, -2, 3), (4, -3, -4, 3), (-1, -3, 1, 3),
+                         (-2, -3, 2, 3), (-4, -3, 4, 3), (1, -4, -1, 4), (2, -4, -2, 4), (3, -4, -3, 4),
+                         (-1, -4, 1, 4), (-2, -4, 2, 4), (-3, -4, 3, 4)])
+        paths = remove_duplicates(paths,bidirectional=True)
+        self.assertTrue(paths == [(4, 1, -4, -1), (4, 3, -4, -3), (2, 1, -2, -1),
+                                  (3, 2, -3, -2), (3, 1, -3, -1), (4, 2, -4, -2)])
+        staples = derive_paths(paths,+1,bidirectional=True)
+        self.assertTrue(staples == [(-4, -1, 4), (4, -1, -4), (-2, -1, 2), 
+                                    (2, -1, -2), (-3, -1, 3), (3, -1, -3)])
+
 
 class TestPathKernels(unittest.TestCase):
 
