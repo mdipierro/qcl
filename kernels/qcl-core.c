@@ -221,8 +221,8 @@ void heatbath_SU2(cfloat_t *a,
   dk=sqrt(e.x*e.x+e.y*e.y+e.z*e.z+e.w*e.w);
   p0=(dk*beta_eff);
   u0=(cfloat_t)(e.x/dk,-e.w/dk);
-  u1=(cfloat_t)(e.z/dk,-e.y/dk);
-  u2=(cfloat_t)(-e.z/dk,-e.y/dk);
+  u1=(cfloat_t)(-e.z/dk,-e.y/dk);
+  u2=(cfloat_t)(e.z/dk,-e.y/dk);
   u3=(cfloat_t)(e.x/dk,e.w/dk);  
   do {
     do {

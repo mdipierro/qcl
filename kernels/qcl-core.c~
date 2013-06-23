@@ -236,7 +236,7 @@ void heatbath_SU2(cfloat_t *a,
   } while (r.w*r.w > (1.0-0.5*delta));  
   b.x = 1.0-delta;
   r = uniform4(prst);
-  cos_theta=1.0-0.000001; // 2.0*r.x-1.0;
+  cos_theta=2.0*r.x-1.0;
   sin_theta=sqrt(1.0-cos_theta*cos_theta);
   sin_alpha=sqrt(1-b.x*b.x);
   phi=2.0*Pi*r.y;

@@ -1023,7 +1023,7 @@ def opencl_paths(function_name, # name of the generated function
                             for j in range(n):
                                 var = CX % (name,i,j)
                                 var2 = CX % (name2,j,i)
-                                code.append('%s.x = %s.x;' %(var2,var))
+                                code.append('%s.x = %s.x;' % (var2, var))
                                 code.append('%s.y = -%s.y;' % (var2, var))
             # if this is a link but the first in path
             if z>0:
@@ -1054,7 +1054,7 @@ def opencl_paths(function_name, # name of the generated function
                             line += MINUS+IM % (name1,i,k);
                             line += TIMES+IM % (name2,k,j);
                             for k in range(1,n):
-                                line += NEWLINE
+                                line += NEWLINE + ' '*len(var_re +EQUAL)
                                 line += PLUS+RE % (name1,i,k);
                                 line += TIMES+RE % (name2,k,j);
                                 line += MINUS+IM % (name1,i,k);
@@ -1067,7 +1067,7 @@ def opencl_paths(function_name, # name of the generated function
                             line += PLUS+IM % (name1,i,k);
                             line += TIMES+RE % (name2,k,j);
                             for k in range(1,n):
-                                line += NEWLINE
+                                line += NEWLINE + ' '*len(var_re +EQUAL)
                                 line += PLUS+RE % (name1,i,k);
                                 line += TIMES+IM % (name2,k,j);
                                 line += PLUS+IM % (name1,i,k);
@@ -1086,7 +1086,7 @@ def opencl_paths(function_name, # name of the generated function
                             line += PLUS+IM % (name1,i,k);
                             line += TIMES+IM % (name2,j,k);
                             for k in range(1,n):
-                                line += NEWLINE
+                                line += NEWLINE + ' '*len(var_re +EQUAL)
                                 line += PLUS+RE % (name1,i,k);
                                 line += TIMES+RE % (name2,j,k);
                                 line += PLUS+IM % (name1,i,k);
@@ -1099,7 +1099,7 @@ def opencl_paths(function_name, # name of the generated function
                             line += PLUS+IM % (name1,i,k);
                             line += TIMES+RE % (name2,j,k);
                             for k in range(1,n):
-                                line += NEWLINE
+                                line += NEWLINE + ' '*len(var_re +EQUAL)
                                 line += MINUS+RE % (name1,i,k);
                                 line += TIMES+IM % (name2,j,k);
                                 line += PLUS+IM % (name1,i,k);
@@ -1205,11 +1205,11 @@ def test_something():
 
 def test_heatbath():
     N = 10
-    Nc = 2
+    Nc = 3
     comm = Communicator()
     space = comm.Lattice((N,N))
     U = space.Field((space.d,Nc,Nc))
-    U.set_hot()
+    U.set_cold()
     print '<plq> = ',U.average_plaquette()
     wilson = GaugeAction(space)
     wilson.add_term(1.0,(2,1,-2,-1))
@@ -1219,7 +1219,7 @@ def test_heatbath():
     #wilson.add_term(1.0,(2,3,-2,-3))
     #wilson.add_term(1.0,(2,4,-2,-4))
     #wilson.add_term(1.0,(3,4,-3,-4))
-    code = wilson.heatbath(U,beta=100.0)
+    code = wilson.heatbath(U,beta=3.0)
     # print code.source
     avg_plq = 0.0
     for k in range(10000):
