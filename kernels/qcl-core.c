@@ -16,7 +16,7 @@ void assert(bool value)
 
 struct bbox_t {
   int a[MAXD]; // global coordinate of content
-  int b[MAXD]; // top border
+  int b[MAXD]; // top border (CHECK THE USE OF THIS)
   int c[MAXD]; // content size
   int d[MAXD]; // outer size
   int e[MAXD]; // init looping position
@@ -32,11 +32,15 @@ inline struct shift_t gid2shift(const size_t gid, const struct bbox_t *bbox) {
   int dd;
   size_t i = gid;
   size_t j;
-  for(int k=0; k<MAXD; k++) {
+  for(int k=MAXD-1; k>=0; k--) {
     dd = (*bbox).c[k]/(*bbox).f[k];
-    j = i % dd;
-    shift.s[k] = j*(*bbox).f[k]+(*bbox).e[k];
-    i = (i - j) / dd;
+    if((*bbox).d[k]>0 && dd>0) {
+      j = i % dd;
+      shift.s[k] = j*(*bbox).f[k]+(*bbox).e[k];
+      i = (i - j) / dd;
+    } else {
+      shift.s[k] = (*bbox).e[k]; // unused coordinate (set to zero)
+    }
   }
   assert(i==0);
   return shift;
@@ -173,6 +177,20 @@ kernel void set_cold(global cfloat_t *U,
       }
 }
 
+kernel void set_custom(global cfloat_t *U, 
+		     int d, 
+		     int n,
+		     struct bbox_t bbox) {
+  int gid = get_global_id(0);                                               
+  int idx = gid2idx(gid,&bbox);
+  for(int mu=0; mu<d; mu++)
+    for(int i=0; i<n; i++)
+      for(int j=0; j<n; j++) {
+	U[(idx*d+mu)*n*n+i*n+j].x = (i==j)?(idx+1):0;	  
+	U[(idx*d+mu)*n*n+i*n+j].y = (i==j)?0:0;
+      }
+}
+
 kernel void set_hot(global cfloat_t *U, 
 		    int d, 
 		    int n,
@@ -209,14 +227,14 @@ void heatbath_SU2(cfloat_t *a,
   do {
     do {
       r = uniform4(prst);
-    } while (r.x<0.0001 && r.y<0.0001);
+    } while (r.x<0.0001 || r.y<0.0001);
     r.x = -log(r.x)/p0;
     r.y = -log(r.y)/p0;
     r.z = cos(2.0*Pi*r.z);
     r.z = r.z*r.z;
     delta = r.y+r.x*r.z;
   } while (r.w*r.w > (1.0-0.5*delta));  
-  b.x=1.0-delta;
+  b.x = 1.0-delta;
   r = uniform4(prst);
   cos_theta=2.0*r.x-1.0;
   sin_theta=sqrt(1.0-cos_theta*cos_theta);

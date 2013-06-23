@@ -149,6 +149,7 @@ def makesource(vars=None,filename='kernels/qcl-core.c'):
     newlines = []
     padding = 0
     for line in lines:
+        #if line and not line[:1] in '}#':
         if not line.startswith('}') and line:
             if padding==0 and newlines:
                 newlines.append('\n')
@@ -492,6 +493,17 @@ class Field(object):
                      self.lattice.bbox).wait()
         cl.enqueue_copy(self.lattice.comm.queue, self.data, data_buffer).wait()
 
+    def set_custom(self):
+        """ uses a kernel to set all links to cold """
+        shape = self.siteshape
+        if not (len(shape)==3 and shape[1]==shape[2]): raise RuntimeError
+        data_buffer = self.lattice.comm.buffer('w',self.data)
+        prg = self.lattice.comm.compile(makesource())
+        prg.set_custom(self.lattice.comm.queue,(self.lattice.size,),None,
+                       data_buffer,numpy.int32(shape[0]),numpy.int32(shape[1]),
+                       self.lattice.bbox).wait()
+        cl.enqueue_copy(self.lattice.comm.queue, self.data, data_buffer).wait()
+
     def check_cold(self):
         for idx in xrange(self.lattice.size):
             for mu in xrange(self.siteshape[0]):
@@ -531,11 +543,14 @@ class Field(object):
                         print U*hermitian(U), 'FAIL!'
             raise RuntimeError, "U is not unitary"
 
-    def average_plaquette(self,shape=(1,2,-1,-2)):        
+    def average_plaquette(self,shape=(1,2,-1,-2)):
         paths = bc_symmetrize(shape,d=self.lattice.d,positive_only=True)
-        paths = remove_duplicates(paths,bidirectional=True)
+        paths = remove_duplicates(paths,bidirectional=True)        
+        # print 'average_plaquette.paths=',paths        
         code = self.lattice.Field(1).set_link_product(self,paths)
         phi=code.run()
+        #for idx in xrange(self.lattice.size):
+        #    print idx, phi.data[idx]
         return phi.sum()/(self.lattice.size*len(paths)*self.siteshape[-1])
 
 class GaugeAction(object):
@@ -693,6 +708,15 @@ def test_gauge():
         if N<8: U.check_unitarity()
         assert abs(U.average_plaquette()) < 0.5
         print 'done'
+
+def test_gauge2():
+    """ using test_custom to figure out lattice layout """
+    N, Nc = 2, 2
+    comm = Communicator()
+    space = comm.Lattice((N,N,N,N))
+    U = space.Field((space.d,Nc,Nc))
+    U.set_custom()
+    print U.average_plaquette()
 
 def test_lattice_fields():
     N = int(sys.argv[1]) if len(sys.argv)>1 else 4
@@ -1058,28 +1082,28 @@ def opencl_paths(function_name, # name of the generated function
                             k = 0
                             line = var_re + EQUAL
                             line += PLUS+RE % (name1,i,k);
-                            line += TIMES+RE % (name2,k,j);
+                            line += TIMES+RE % (name2,j,k);
                             line += PLUS+IM % (name1,i,k);
-                            line += TIMES+IM % (name2,k,j);
+                            line += TIMES+IM % (name2,j,k);
                             for k in range(1,n):
                                 line += NEWLINE
                                 line += PLUS+RE % (name1,i,k);
-                                line += TIMES+RE % (name2,k,j);
+                                line += TIMES+RE % (name2,j,k);
                                 line += PLUS+IM % (name1,i,k);
-                                line += TIMES+IM % (name2,k,j);
+                                line += TIMES+IM % (name2,j,k);
                             code.append(line+';')
                             k = 0
                             line = var_im + EQUAL
                             line += MINUS+RE % (name1,i,k);
-                            line += TIMES+IM % (name2,k,j);
+                            line += TIMES+IM % (name2,j,k);
                             line += PLUS+IM % (name1,i,k);
-                            line += TIMES+RE % (name2,k,j);
+                            line += TIMES+RE % (name2,j,k);
                             for k in range(1,n):
                                 line += NEWLINE
                                 line += MINUS+RE % (name1,i,k);
-                                line += TIMES+IM % (name2,k,j);
+                                line += TIMES+IM % (name2,j,k);
                                 line += PLUS+IM % (name1,i,k);
-                                line += TIMES+RE % (name2,k,j);
+                                line += TIMES+RE % (name2,j,k);
                             code.append(line+';')
             if z==len(path)-1:
                 key = (site.coords,path)
@@ -1180,20 +1204,21 @@ def test_something():
     
 
 def test_heatbath():
-    N = int(sys.argv[1]) if len(sys.argv)>1 else 4
-    Nc = 3
+    N = 10
+    Nc = 2
     comm = Communicator()
-    space = comm.Lattice((N,N,N,N))
+    space = comm.Lattice((N,N))
     U = space.Field((space.d,Nc,Nc))
-    U.set_cold()
+    U.set_hot()
     print '<plq> = ',U.average_plaquette()
     wilson = GaugeAction(space)
-    wilson.add_term(1.0,(1,2,-1,-2))
-    wilson.add_term(1.0,(1,3,-1,-3))
-    wilson.add_term(1.0,(1,4,-1,-4))
-    wilson.add_term(1.0,(2,3,-2,-3))
-    wilson.add_term(1.0,(2,4,-2,-4))
-    wilson.add_term(1.0,(3,4,-3,-4))
+    wilson.add_term(1.0,(2,1,-2,-1))
+    #wilson.add_term(1.0,(1,2,-1,-2))
+    #wilson.add_term(1.0,(1,3,-1,-3))
+    #wilson.add_term(1.0,(1,4,-1,-4))
+    #wilson.add_term(1.0,(2,3,-2,-3))
+    #wilson.add_term(1.0,(2,4,-2,-4))
+    #wilson.add_term(1.0,(3,4,-3,-4))
     code = wilson.heatbath(U,beta=100.0)
     # print code.source
     avg_plq = 0.0
@@ -1201,7 +1226,7 @@ def test_heatbath():
         code.run()        
         plq = U.average_plaquette()
         avg_plq = (avg_plq * k + plq)/(k+1)
-        print '<plaq> =', avg_plq
+        print '<plaq> =', plq, '<avg> =', avg_plq
         if N<8:
             U.check_unitarity(output=False)
         if len(space.dims) == 4 and N==12:
@@ -1213,6 +1238,7 @@ def test_heatbath():
 
 if __name__=='__main__':
     #test_gauge()
+    #test_gauge2()
     #test_paths()
     #test_lattice_fields()
     #test_opencl_paths()
