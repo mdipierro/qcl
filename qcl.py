@@ -1204,22 +1204,16 @@ def test_something():
     
 
 def test_heatbath():
-    N = 10
+    N = 4
     Nc = 3
     comm = Communicator()
-    space = comm.Lattice((N,N))
+    space = comm.Lattice((N,N,N,N))
     U = space.Field((space.d,Nc,Nc))
     U.set_cold()
     print '<plq> = ',U.average_plaquette()
     wilson = GaugeAction(space)
-    wilson.add_term(1.0,(2,1,-2,-1))
-    #wilson.add_term(1.0,(1,2,-1,-2))
-    #wilson.add_term(1.0,(1,3,-1,-3))
-    #wilson.add_term(1.0,(1,4,-1,-4))
-    #wilson.add_term(1.0,(2,3,-2,-3))
-    #wilson.add_term(1.0,(2,4,-2,-4))
-    #wilson.add_term(1.0,(3,4,-3,-4))
-    code = wilson.heatbath(U,beta=3.0)
+    wilson.add_term(1.0,(1,2,-1,-2))
+    code = wilson.heatbath(U,beta=4.0)
     # print code.source
     avg_plq = 0.0
     for k in range(10000):
