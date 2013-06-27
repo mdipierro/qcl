@@ -788,24 +788,24 @@ class FermiOperator(object):
         coefficients,paths = [], []
         k = 0
         action = ''
+        nc = U.data.shape[-1]
         for coefficient, gamma, opaths in self.terms:
             code += opencl_paths(function_name = name+str(k),
                                  lattice = self.lattice,
-                                 coefficients=[coefficient],
+                                 coefficients=[1.0],
                                  paths=opaths,
-                                 nc = U.data.shape[-1],
+                                 nc = nc,
                                  initialize = True,
                                  trace = False)
             
             k += 1
-        print code
-        action = '...' # DO THIS
+        action = opencl_fermi_operator(self.terms,U.lattice.d,nc,name)
         source = makesource({'paths':code,'fermi_operator':action})
         def runner(source,self=self,phi=phi,U=U,psi=psi):
             shapeu = U.siteshape
             if len(shapeu)!=3 or shapeu[1]!=shapeu[2]: raise RuntimeError
             shapep = psi.siteshape
-            if len(shapep)==2 or shapeu[1]!=shapep[-1]: raise RuntimeError
+            if len(shapep)!=2 or shapeu[2]!=shapep[1]: raise RuntimeError
 
             phi_buffer = U.lattice.comm.buffer('rw',phi.data)
             U_buffer = U.lattice.comm.buffer('r',U.data)
@@ -813,7 +813,7 @@ class FermiOperator(object):
 
             prg = U.lattice.comm.compile(source)
             event = prg.fermi_operator(U.lattice.comm.queue,
-                                       (size,),None,
+                                       (U.lattice.size,),None,
                                        phi_buffer,
                                        U_buffer,
                                        psi_buffer,
@@ -1253,6 +1253,74 @@ def opencl_paths(function_name, # name of the generated function
                       precision=precision,
                       body=body)
 
+def opencl_fermi_operator(terms,d,nc,name='aux'):
+    code = []
+    h = 0 
+    for coefficient, gamma, opaths in terms:
+        code.append("%s%s(path,U,idx,&bbox);" % (name,h))        
+        path = opaths[0]
+        site = [0]*d
+        for step in opaths[0]: site[abs(step) % d] += 1 if step>0 else -1
+        for i in range(d): code.append('delta.s[%s] = %s;' % (i, site[i]));
+        code.append('q = psi+idx*nspin*nc;');
+        code.append('p = phi+idx2idx_shift(idx,delta,&bbox)*nspin*nc;');
+        nspin = gamma.shape[0]
+        spinor = [0]*(nspin*nc)
+        for r in range(nspin):
+            for i in range(nc):
+                k = (r*nc+i)
+                spinor[k] = 0+0j
+                line = 'spinor[%s].x =' % k
+                for c in range(nspin):
+                    coeff = coefficient*gamma[r,c]
+                    if coeff.real:
+                        line+="+ (%s)*q[%s].x" % (coeff.real,c*nc+i)
+                        spinor[k] += 1
+                    if coeff.imag:
+                        line+="- (%s)*q[%s].y" % (coeff.imag,c*nc+i)
+                        spinor[k] += 1
+                line+=';'
+                if spinor[k].real: code.append(line)
+                line = 'spinor[%s].y =' % k
+                for c in range(nspin):
+                    coeff = coefficient*gamma[r,c]
+                    if coeff.real:
+                        line+="+ (%s)*q[%s].y" % (coeff.real,c*nc+i)
+                        spinor[k] += 1j                        
+                    if coeff.imag:
+                        line+="+ (%s)*q[%s].x" % (coeff.imag,c*nc+i)
+                        spinor[k] += 1j
+                line+=';'
+                if spinor[k].imag: code.append(line)
+
+        for r in range(nspin):
+            for i in range(nc):
+                counter = 0
+                line = 'p[%s].x += ' % (r*nc+i)
+                for j in range(nc):
+                    k = r*nc+j
+                    if spinor[k].real:
+                        line += '\n\t\t + path[%s].x*spinor[%s].x' % (i*nc+j,k)
+                        counter += 1
+                    if spinor[k].imag:
+                        line += '\n\t\t - path[%s].y*spinor[%s].y' % (i*nc+j,k)
+                        counter += 1
+                line += ';'
+                if counter: code.append(line)
+                counter = 0
+                line = 'p[%s].y += ' % (r*nc+i)
+                for j in range(nc):
+                    k = r*nc+j
+                    if spinor[k].imag:
+                        line += '\n\t + path[%s].x*spinor[%s].y' % (i*nc+j,k)
+                        counter += 1
+                    if spinor[k].real:
+                        line += '\n\t + path[%s].y*spinor[%s].x' % (i*nc+j,k)
+                        counter += 1
+                line += ';'
+                if counter: code.append(line)
+        h += 1
+    return '\n'.join(code)
 
 # ###########################################################
 # Tests
@@ -1377,8 +1445,8 @@ class TestHeatbath(unittest.TestCase):
                 U.check_unitarity(output=False)
         self.assertTrue( 0.29 < abs(avg_plq) < 0.3 )
 
-class TestWilsonFermions(unittest.TestCase):
-    def test_heatbath(self):
+class TestFermions(unittest.TestCase):
+    def test_wilson_action(self):
         N, nc, nspin = 4, 3, 4
         comm = Communicator()
         space = comm.Lattice((N,N,N,N))
@@ -1395,10 +1463,9 @@ class TestWilsonFermions(unittest.TestCase):
         for mu in (1,2,3,4):
             wilson.add_term(kappa, r*I-gamma[mu], [(mu,)])
             wilson.add_term(kappa, r*I+gamma[mu], [(-mu,)])
-        wilson.multiply(phi,U,psi)
+        wilson.multiply(phi,U,psi).run()
 
 if __name__=='__main__':
     unittest.main()
-    
 
 

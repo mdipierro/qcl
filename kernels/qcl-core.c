@@ -350,8 +350,8 @@ kernel void fermi_operator(global cfloat_t *phi,
   size_t gid = get_global_id(0);
   size_t idx = gid2idx(gid,&bbox);
   size_t idx2;
-  cfloat_t *p;
-  cfloat_t *q;
+  global cfloat_t *p;
+  global cfloat_t *q;
   struct shift_t delta;
   int n = nc;
   cfloat_t path[MAXN*MAXN];
@@ -372,15 +372,6 @@ kernel void fermi_operator(global cfloat_t *phi,
     p[1].x = path* q[1].x...;
   }
   */
-  //[inject:wilson_operator]
-  // something like
-  // if(mu==0) aux0(path,U,idx,&bbox);
-  // if(mu==1) aux1(path,U,idx,&bbox);
-  // if(mu==2) aux2(path,U,idx,&bbox);
-  // if(mu==3) aux3(path,U,idx,&bbox);
-  // idx2 = idx2idx_shift(idx,delta,&bbox);
-
-  // U[ixmu+j*n+k]
-  
+  //[inject:fermi_operator]  
 }
 
