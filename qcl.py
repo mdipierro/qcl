@@ -1462,7 +1462,7 @@ class TestFermions(unittest.TestCase):
         psi = space.Field((nspin,nc))        
         phi = space.Field((nspin,nc))
 
-        U.set_hot()
+        U.set_cold()
         p = space.Site((0,0,4,4))
         psi[p,0,0] = 100.0
         wilson = FermiOperator(space)
