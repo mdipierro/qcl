@@ -167,8 +167,8 @@ kernel void set_cold(global cfloat_t *U,
 		     int d, 
 		     int n,
 		     struct bbox_t bbox) {
-  int gid = get_global_id(0);                                               
-  int idx = gid2idx(gid,&bbox);
+  size_t gid = get_global_id(0);                                               
+  size_t idx = gid2idx(gid,&bbox);
   for(int mu=0; mu<d; mu++)
     for(int i=0; i<n; i++)
       for(int j=0; j<n; j++) {
@@ -181,8 +181,8 @@ kernel void set_custom(global cfloat_t *U,
 		     int d, 
 		     int n,
 		     struct bbox_t bbox) {
-  int gid = get_global_id(0);                                               
-  int idx = gid2idx(gid,&bbox);
+  size_t gid = get_global_id(0);                                               
+  size_t idx = gid2idx(gid,&bbox);
   for(int mu=0; mu<d; mu++)
     for(int i=0; i<n; i++)
       for(int j=0; j<n; j++) {
@@ -196,8 +196,8 @@ kernel void set_hot(global cfloat_t *U,
 		    int n,
 		    struct bbox_t bbox,
 		    global ranluxcl_state_t *ranluxcltab) {
-  int gid = get_global_id(0);                                               
-  int idx = gid2idx(gid,&bbox);
+  size_t gid = get_global_id(0);                                               
+  size_t idx = gid2idx(gid,&bbox);
   ranluxcl_state_t rst;
   ranluxcl_download_seed(&rst,ranluxcltab);
   for(int mu=0; mu<d; mu++)
@@ -279,15 +279,17 @@ void mul_h(cfloat_t *A, cfloat_t *B, cfloat_t *C, int s, int t, int u)
 
 //[inject:paths]
 
+
 kernel void heatbath(global cfloat_t *U,		      		      
 		     int d, 
 		     int n,
 		     float beta,
 		     int n_iter,
+		     int m_iter,
 		     struct bbox_t bbox,
 		     global ranluxcl_state_t *ranluxcltab) {
-  int gid = get_global_id(0);
-  int idx = gid2idx(gid,&bbox);
+  size_t gid = get_global_id(0);
+  size_t idx = gid2idx(gid,&bbox);
   size_t ixmu, ik, jk;
   cfloat_t a[4], tmp;  
   cfloat_t staples[MAXN*MAXN];
@@ -295,43 +297,90 @@ kernel void heatbath(global cfloat_t *U,
   ranluxcl_state_t rst;
   ranluxcl_download_seed(&rst,ranluxcltab);
 
-  for(int mu=0; mu<d; mu++) {
-    ixmu = (idx*d+mu)*n*n;
+  for(int step=0; step<n_iter; step++) 
+    for(int mu=0; mu<d; mu++) {
+      ixmu = (idx*d+mu)*n*n;
 
-    
-    for(int i=0; i<n; i++)
-      for(int j=0; j<n; j++)
-	staples[i*n+j]=(cfloat_t)(0.0,0.0);    
-    
-    //[inject:heatbath_action]
-    
-    for(int iter=0; iter<n_iter; iter++)
-      for(int i=0; i<n-1; i++)
-	for(int j=i+1; j<n; j++) {
-	  a[0]=(cfloat_t)(0.0,0.0);
-	  a[1]=(cfloat_t)(0.0,0.0);
-	  a[2]=(cfloat_t)(0.0,0.0);
-	  a[3]=(cfloat_t)(0.0,0.0);
-	  for(int k=0; k<n; k++) {
-	    
-	    a[0] = cfloat_add(a[0],cfloat_mul(U[ixmu+i*n+k],
-					      cfloat_conj(staples[i*n+k])));
-	    a[1] = cfloat_add(a[1],cfloat_mul(U[ixmu+i*n+k],
-					      cfloat_conj(staples[j*n+k])));
-	    a[2] = cfloat_add(a[2],cfloat_mul(U[ixmu+j*n+k],
-					      cfloat_conj(staples[i*n+k])));
-	    a[3] = cfloat_add(a[3],cfloat_mul(U[ixmu+j*n+k],
-					      cfloat_conj(staples[j*n+k])));
+      //[inject:heatbath_action]
+      // something like
+      // if(mu==0) aux0(staples,U,idx,&bbox);
+      // if(mu==1) aux1(staples,U,idx,&bbox);
+      // if(mu==2) aux2(staples,U,idx,&bbox);
+      // if(mu==3) aux3(staples,U,idx,&bbox);
+      
+      for(int iter=0; iter<m_iter; iter++)
+	for(int i=0; i<n-1; i++)
+	  for(int j=i+1; j<n; j++) {
+	    a[0]=(cfloat_t)(0.0,0.0);
+	    a[1]=(cfloat_t)(0.0,0.0);
+	    a[2]=(cfloat_t)(0.0,0.0);
+	    a[3]=(cfloat_t)(0.0,0.0);
+	    for(int k=0; k<n; k++) {
+	      
+	      a[0] = cfloat_add(a[0],cfloat_mul(U[ixmu+i*n+k],
+						cfloat_conj(staples[i*n+k])));
+	      a[1] = cfloat_add(a[1],cfloat_mul(U[ixmu+i*n+k],
+						cfloat_conj(staples[j*n+k])));
+	      a[2] = cfloat_add(a[2],cfloat_mul(U[ixmu+j*n+k],
+						cfloat_conj(staples[i*n+k])));
+	      a[3] = cfloat_add(a[3],cfloat_mul(U[ixmu+j*n+k],
+						cfloat_conj(staples[j*n+k])));
+	    }
+	    heatbath_SU2(a,beta/n,&rst);
+	    for(int k=0; k<n; k++) {
+	      ik = ixmu+i*n+k;
+	      jk = ixmu+j*n+k;
+	      tmp = cfloat_add(cfloat_mul(a[0],U[ik]),cfloat_mul(a[1],U[jk]));
+	      U[jk] = cfloat_add(cfloat_mul(a[2],U[ik]),cfloat_mul(a[3],U[jk]));
+	      U[ik] = tmp;
+	    }	  
 	  }
-	  heatbath_SU2(a,beta/n,&rst);
-	  for(int k=0; k<n; k++) {
-	    ik = ixmu+i*n+k;
-	    jk = ixmu+j*n+k;
-	    tmp = cfloat_add(cfloat_mul(a[0],U[ik]),cfloat_mul(a[1],U[jk]));
-	    U[jk] = cfloat_add(cfloat_mul(a[2],U[ik]),cfloat_mul(a[3],U[jk]));
-	    U[ik] = tmp;
-	  }	  
-	}
-  }
+    }
   ranluxcl_upload_seed(&rst,ranluxcltab);
 }
+
+
+kernel void fermi_operator(global cfloat_t *phi,
+			   global cfloat_t *U,	
+			   global cfloat_t *psi,
+			   int nspin,
+			   int nc,
+			   struct bbox_t bbox) {
+
+  size_t gid = get_global_id(0);
+  size_t idx = gid2idx(gid,&bbox);
+  size_t idx2;
+  cfloat_t *p;
+  cfloat_t *q;
+  struct shift_t delta;
+  int n = nc;
+  cfloat_t path[MAXN*MAXN];
+  cfloat_t spinor[MAXN*MAXN];
+  cfloat_t coeff;
+
+  /*
+  aux0(path,U,idx,&bbox);
+  delta.s[0]=...;
+  delta.s[1]=...;
+  idx2 = idx2idx_shift(idx,delta,&bbox);
+  q = phi2+idx*nspin*nc;
+  spinor[0*nc+0] = coeff*q[0*nc+0]; // for each spin conponent
+  for(int spin=0; spin<nspin; spin++) {
+    q = spinor[spin*nc];
+    p = phi+idx*nspin*nc+spin*nc;    
+    p[0].x = path* q[0].x...;
+    p[1].x = path* q[1].x...;
+  }
+  */
+  //[inject:wilson_operator]
+  // something like
+  // if(mu==0) aux0(path,U,idx,&bbox);
+  // if(mu==1) aux1(path,U,idx,&bbox);
+  // if(mu==2) aux2(path,U,idx,&bbox);
+  // if(mu==3) aux3(path,U,idx,&bbox);
+  // idx2 = idx2idx_shift(idx,delta,&bbox);
+
+  // U[ixmu+j*n+k]
+  
+}
+

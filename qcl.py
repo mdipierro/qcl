@@ -130,6 +130,63 @@ def product(a):
     """ Auxiliary function computes product of a items """
     return 1 if not a else reduce(operator.mul,a)
 
+def code_mul(name,name1,name2,n,m,p):
+    RE, IM = '%s_%ix%i.x', '%s_%ix%i.y'
+    ADD, PLUS, MINUS, TIMES, EQUAL = ' += ', '+', '-', '*', ' = '
+    NEWLINE = '\n'+' '*12
+    code = []
+    for i in range(n):
+        for j in range(m):
+            var_re = RE % (name,i,j)
+            var_im = IM % (name,i,j)
+            k = 0
+            line = var_re + EQUAL
+            for k in range(0,p):
+                line += NEWLINE + ' '*len(var_re +EQUAL)
+                line += PLUS+RE % (name1,i,k);
+                line += TIMES+RE % (name2,k,j);
+                line += MINUS+IM % (name1,i,k);
+                line += TIMES+IM % (name2,k,j);
+            code.append(line+';')
+            line = var_im + EQUAL
+            for k in range(0,n):
+                line += NEWLINE + ' '*len(var_re +EQUAL)
+                line += PLUS+RE % (name1,i,k);
+                line += TIMES+IM % (name2,k,j);
+                line += PLUS+IM % (name1,i,k);
+                line += TIMES+RE % (name2,k,j);
+            code.append(line+';')
+    return code
+
+def code_mulh(name,name1,name2,n,m,p):
+    RE, IM = '%s_%ix%i.x', '%s_%ix%i.y'
+    ADD, PLUS, MINUS, TIMES, EQUAL = ' += ', '+', '-', '*', ' = '
+    NEWLINE = '\n'+' '*12
+    code = []
+    for i in range(n):
+        for j in range(m):
+            var_re = RE % (name,i,j)
+            var_im = IM % (name,i,j)
+            k = 0
+            line = var_re + EQUAL
+            for k in range(0,p):
+                line += NEWLINE + ' '*len(var_re +EQUAL)
+                line += PLUS+RE % (name1,i,k);
+                line += TIMES+RE % (name2,j,k);
+                line += PLUS+IM % (name1,i,k);
+                line += TIMES+IM % (name2,j,k);
+            code.append(line+';')
+            k = 0
+            line = var_im + EQUAL
+            for k in range(0,p):
+                line += NEWLINE + ' '*len(var_re +EQUAL)
+                line += MINUS+RE % (name1,i,k);
+                line += TIMES+IM % (name2,j,k);
+                line += PLUS+IM % (name1,i,k);
+                line += TIMES+RE % (name2,j,k);
+            code.append(line+';')
+    return code
+
 # ###########################################################
 # Part I, lattices and fields
 # ###########################################################
@@ -636,11 +693,11 @@ class GaugeAction(object):
         if isinstance(paths,tuple):
             paths = bc_symmetrize(paths,d=self.lattice.d)
             paths = remove_duplicates(paths,bidirectional=False)
-        elif not (isinstance(paths,list) and isinstance(paths[0],tuple)):
+        elif not (isinstance(paths,list) or not isinstance(paths[0],tuple)):
             raise RuntimeError, "not a valid action term" 
         self.terms.append((coefficient,paths))
         return self
-    def heatbath(self,U,beta,n_iter=1,name='aux'):
+    def heatbath(self,U,beta,n_iter=1,m_iter=1,name='aux'):
         """
         Generates a kernel which performs the SU(n) heatbath.
         Example:
@@ -663,10 +720,12 @@ class GaugeAction(object):
                                  coefficients=coefficients,
                                  paths=paths,
                                  nc = U.data.shape[-1],
-                                 trace = (U.data.shape[-1]==1))
-        action = opencl_heatbath_action(self.lattice.d,name)
+                                 initialize=True,
+                                 trace=False)
+        action = '\n'.join('if(mu==%i) %s%i(staples,U,idx,&bbox);' % 
+                           (i,name,i) for i in range(self.lattice.d))
         source = makesource({'paths':code,'heatbath_action':action})
-        def runner(source,self=self,U=U,beta=beta,n_iter=n_iter,
+        def runner(source,self=self,U=U,beta=beta,n_iter=n_iter,m_iter=m_iter,
                    displacement=displacement):
             shape = U.siteshape
             if not (len(shape)==3 and shape[1]==shape[2]): raise RuntimeError
@@ -683,12 +742,88 @@ class GaugeAction(object):
                              numpy.int32(shape[1]),
                              numpy.float32(beta),
                              numpy.int32(n_iter),
+                             numpy.int32(m_iter),
                              U.lattice.bbox,
                              U.lattice.prngstate_buffer)
                 if DEBUG:
                     print 'waiting'
                 event.wait()
             cl.enqueue_copy(U.lattice.comm.queue, U.data, data_buffer).wait()
+            return self
+        return Code(source,runner)
+
+
+class FermiOperator(object):
+    """
+    Class to store paths and coefficients relative to any gauge action
+    """
+    def __init__(self,lattice):
+        self.lattice = lattice
+        self.terms = []
+    def add_term(self,coefficient,gamma,paths):
+        """
+        Paths are symmetrized. For example: 
+        >>> wilson = FermionOperator(lattice).add_term(
+            kappa,(1-Gamma[0]),path = [(4,)])
+        >>> wilson = FermionOperator(lattice).add_term(
+            kappa,(1+Gamma[0]),path = [(-4,)])
+        >>> wilson = FermionOperator(lattice).add_term(
+            c_sw,Gamma[mu][nu],path = [()],em_field,(mu,nu))
+        """
+        if not (isinstance(paths,list) or not isinstance(paths[0],tuple)):
+            raise RuntimeError, "not a valid action term" 
+        self.terms.append((coefficient,gamma,paths))
+        return self
+    def multiply(self,phi,U,psi,name='aux'):
+        """
+        Computes phi = D[U]*psi
+        
+        Generates a kernel which performs the SU(n) heatbath.
+        Example:
+        >>> wilson = GaugeAction(lattice).add_term(1.0,paths = (1,2,-1,-2)) 
+        >>> wilson.heatbath(beta,n_iter=10)
+        """
+        name = name or random_name()
+        code = ''
+        coefficients,paths = [], []
+        k = 0
+        action = ''
+        for coefficient, gamma, opaths in self.terms:
+            code += opencl_paths(function_name = name+str(k),
+                                 lattice = self.lattice,
+                                 coefficients=[coefficient],
+                                 paths=opaths,
+                                 nc = U.data.shape[-1],
+                                 initialize = True,
+                                 trace = False)
+            
+            k += 1
+        print code
+        action = '...' # DO THIS
+        source = makesource({'paths':code,'fermi_operator':action})
+        def runner(source,self=self,phi=phi,U=U,psi=psi):
+            shapeu = U.siteshape
+            if len(shapeu)!=3 or shapeu[1]!=shapeu[2]: raise RuntimeError
+            shapep = psi.siteshape
+            if len(shapep)==2 or shapeu[1]!=shapep[-1]: raise RuntimeError
+
+            phi_buffer = U.lattice.comm.buffer('rw',phi.data)
+            U_buffer = U.lattice.comm.buffer('r',U.data)
+            psi_buffer = U.lattice.comm.buffer('r',psi.data)
+
+            prg = U.lattice.comm.compile(source)
+            event = prg.fermi_operator(U.lattice.comm.queue,
+                                       (size,),None,
+                                       phi_buffer,
+                                       U_buffer,
+                                       psi_buffer,
+                                       numpy.int32(shapep[-1]),
+                                       numpy.int32(shapeu[-1]),
+                                       U.lattice.bbox)
+            if DEBUG:
+                print 'waiting'
+            event.wait()
+            cl.enqueue_copy(U.lattice.comm.queue, phi.data, phi_buffer).wait()
             return self
         return Code(source,runner)
 
@@ -728,7 +863,7 @@ class Gamma(object):
         else:
             raise RuntimeError, "unknown gamma matrices representation"
         self.matrices = [numpy.matrix(gamma) for gamma in gammas]
-        self.matrices.append(None) # No Gamma(...)[4]
+        self.matrices.append(self.matrices[0]) # gamma[4] same as gamma[0]
         # comupte Gamma[5]
         self.matrices.append(self.matrices[0]*self.matrices[1]*\
                                  self.matrices[2]*self.matrices[3])
@@ -1059,52 +1194,10 @@ def opencl_paths(function_name, # name of the generated function
                 if mu>0: # if link forward
                     code.append('\n// compute %s*%s -> %s' % (name1,name2,name))
                     # extend previous path
-                    for i in range(n):
-                        for j in range(n):
-                            var_re = RE % (name,i,j)
-                            var_im = IM % (name,i,j)
-                            k = 0
-                            line = var_re + EQUAL
-                            for k in range(0,n):
-                                line += NEWLINE + ' '*len(var_re +EQUAL)
-                                line += PLUS+RE % (name1,i,k);
-                                line += TIMES+RE % (name2,k,j);
-                                line += MINUS+IM % (name1,i,k);
-                                line += TIMES+IM % (name2,k,j);
-                            code.append(line+';')
-                            k = 0
-                            line = var_im + EQUAL
-                            for k in range(0,n):
-                                line += NEWLINE + ' '*len(var_re +EQUAL)
-                                line += PLUS+RE % (name1,i,k);
-                                line += TIMES+IM % (name2,k,j);
-                                line += PLUS+IM % (name1,i,k);
-                                line += TIMES+RE % (name2,k,j);
-                            code.append(line+';')
+                    code += code_mul(name,name1,name2,n,n,n)
                 elif mu<0: # if link backwards ... same
                     code.append('\n// compute %s*%s^H -> %s' %(name1,name2,name))
-                    for i in range(n):
-                        for j in range(n):
-                            var_re = RE % (name,i,j)
-                            var_im = IM % (name,i,j)
-                            k = 0
-                            line = var_re + EQUAL
-                            for k in range(0,n):
-                                line += NEWLINE + ' '*len(var_re +EQUAL)
-                                line += PLUS+RE % (name1,i,k);
-                                line += TIMES+RE % (name2,j,k);
-                                line += PLUS+IM % (name1,i,k);
-                                line += TIMES+IM % (name2,j,k);
-                            code.append(line+';')
-                            k = 0
-                            line = var_im + EQUAL
-                            for k in range(0,n):
-                                line += NEWLINE + ' '*len(var_re +EQUAL)
-                                line += MINUS+RE % (name1,i,k);
-                                line += TIMES+IM % (name2,j,k);
-                                line += PLUS+IM % (name1,i,k);
-                                line += TIMES+RE % (name2,j,k);
-                            code.append(line+';')
+                    code += code_mulh(name,name1,name2,n,n,n)
             if z==len(path)-1:
                 key = (site.coords,path)
                 name = matrices[key]
@@ -1131,7 +1224,7 @@ def opencl_paths(function_name, # name of the generated function
                 var = CX % (name, i,j)
                 vars.append((DEFINE % var)+' //4')
             
-    body = '\n'.join('    '+line.replace('\n','\n    ') for line in vars+code)
+    body = '\n'.join(' '*16+line.replace('\n','\n    ') for line in vars+code)
     return """void %(name)s(
                 %(precision)s *out,
                 global const %(precision)s *U,
@@ -1159,9 +1252,6 @@ def opencl_paths(function_name, # name of the generated function
            """ % dict(name=function_name,
                       precision=precision,
                       body=body)
-
-def opencl_heatbath_action(d,name):    
-    return '\n'.join('if(mu==%i) %s%i(staples,U,idx,&bbox);' % (i,name,i) for i in range(d))
 
 
 # ###########################################################
@@ -1287,9 +1377,28 @@ class TestHeatbath(unittest.TestCase):
                 U.check_unitarity(output=False)
         self.assertTrue( 0.29 < abs(avg_plq) < 0.3 )
 
+class TestWilsonFermions(unittest.TestCase):
+    def test_heatbath(self):
+        N, nc, nspin = 4, 3, 4
+        comm = Communicator()
+        space = comm.Lattice((N,N,N,N))
+        U = space.Field((space.d,nc,nc))
+        U.set_cold()
+        psi = space.Field((nspin,nc))
+        phi = space.Field((nspin,nc))
+        
+        wilson = FermiOperator(space)
+        r = 1.0
+        kappa = 0.1234
+        I = identity(4)
+        gamma = Gamma()
+        for mu in (1,2,3,4):
+            wilson.add_term(kappa, r*I-gamma[mu], [(mu,)])
+            wilson.add_term(kappa, r*I+gamma[mu], [(-mu,)])
+        wilson.multiply(phi,U,psi)
 
 if __name__=='__main__':
     unittest.main()
-
+    
 
 
