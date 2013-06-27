@@ -772,7 +772,7 @@ class FermiOperator(object):
         """
         if not (isinstance(paths,list) or not isinstance(paths[0],tuple)):
             raise RuntimeError, "not a valid action term" 
-        self.terms.append((coefficient,gamma,paths))
+        self.terms.append((gamma,paths))
         return self
     def multiply(self,phi,U,psi,name='aux'):
         """
@@ -788,8 +788,9 @@ class FermiOperator(object):
         coefficients,paths = [], []
         k = 0
         action = ''
-        nc = U.data.shape[-1]
-        for coefficient, gamma, opaths in self.terms:
+        nspin = psi.siteshape[0]
+        nc = U.siteshape[2]
+        for gamma, opaths in self.terms:
             code += opencl_paths(function_name = name+str(k),
                                  lattice = self.lattice,
                                  coefficients=[1.0],
@@ -799,7 +800,7 @@ class FermiOperator(object):
                                  trace = False)
             
             k += 1
-        action = opencl_fermi_operator(self.terms,U.lattice.d,nc,name)
+        action = opencl_fermi_operator(self.terms,U.lattice.d,nspin,nc,name)
         source = makesource({'paths':code,'fermi_operator':action})
         def runner(source,self=self,phi=phi,U=U,psi=psi):
             shapeu = U.siteshape
@@ -817,8 +818,6 @@ class FermiOperator(object):
                                        phi_buffer,
                                        U_buffer,
                                        psi_buffer,
-                                       numpy.int32(shapep[-1]),
-                                       numpy.int32(shapeu[-1]),
                                        U.lattice.bbox)
             if DEBUG:
                 print 'waiting'
@@ -1253,17 +1252,21 @@ def opencl_paths(function_name, # name of the generated function
                       precision=precision,
                       body=body)
 
-def opencl_fermi_operator(terms,d,nc,name='aux'):
+def opencl_fermi_operator(terms,d,nspin,nc,name='aux'):
     code = []
     h = 0 
-    for coefficient, gamma, opaths in terms:
+    for r in range(nspin):
+        for i in range(nc):
+            a,b = nspin*nc, r*nc+i            
+            code.append('phi[idx*%s+%s] = psi[idx*%s+%s];' % (a,b,a,b))
+    for gamma, opaths in terms:
         code.append("%s%s(path,U,idx,&bbox);" % (name,h))        
         path = opaths[0]
         site = [0]*d
         for step in opaths[0]: site[abs(step) % d] += 1 if step>0 else -1
         for i in range(d): code.append('delta.s[%s] = %s;' % (i, site[i]));
-        code.append('q = psi+idx*nspin*nc;');
-        code.append('p = phi+idx2idx_shift(idx,delta,&bbox)*nspin*nc;');
+        code.append('p = phi+idx*%s;' % (nspin*nc));
+        code.append('q = psi+idx2idx_shift(idx,delta,&bbox)*%s;' % (nspin*nc));
         nspin = gamma.shape[0]
         spinor = [0]*(nspin*nc)
         for r in range(nspin):
@@ -1272,7 +1275,7 @@ def opencl_fermi_operator(terms,d,nc,name='aux'):
                 spinor[k] = 0+0j
                 line = 'spinor[%s].x =' % k
                 for c in range(nspin):
-                    coeff = coefficient*gamma[r,c]
+                    coeff = gamma[r,c]
                     if coeff.real:
                         line+="+ (%s)*q[%s].x" % (coeff.real,c*nc+i)
                         spinor[k] += 1
@@ -1283,7 +1286,7 @@ def opencl_fermi_operator(terms,d,nc,name='aux'):
                 if spinor[k].real: code.append(line)
                 line = 'spinor[%s].y =' % k
                 for c in range(nspin):
-                    coeff = coefficient*gamma[r,c]
+                    coeff = gamma[r,c]
                     if coeff.real:
                         line+="+ (%s)*q[%s].y" % (coeff.real,c*nc+i)
                         spinor[k] += 1j                        
@@ -1447,24 +1450,32 @@ class TestHeatbath(unittest.TestCase):
 
 class TestFermions(unittest.TestCase):
     def test_wilson_action(self):
-        N, nc, nspin = 4, 3, 4
-        comm = Communicator()
-        space = comm.Lattice((N,N,N,N))
-        U = space.Field((space.d,nc,nc))
-        U.set_cold()
-        psi = space.Field((nspin,nc))
-        phi = space.Field((nspin,nc))
-        
-        wilson = FermiOperator(space)
+        N, nspin, nc = 9, 4, 3
         r = 1.0
         kappa = 0.1234
         I = identity(4)
-        gamma = Gamma()
+        gamma = Gamma('fermilab')
+
+        comm = Communicator()
+        space = comm.Lattice((N,N,N,N))
+        U = space.Field((space.d,nc,nc))
+        psi = space.Field((nspin,nc))        
+        phi = space.Field((nspin,nc))
+
+        U.set_hot()
+        p = space.Site((0,0,4,4))
+        psi[p,0,0] = 100.0
+        wilson = FermiOperator(space)
         for mu in (1,2,3,4):
             wilson.add_term(kappa, r*I-gamma[mu], [(mu,)])
             wilson.add_term(kappa, r*I+gamma[mu], [(-mu,)])
-        wilson.multiply(phi,U,psi).run()
-
+        for k in range(10):                        
+            wilson.multiply(phi,U,psi).run()
+            # project spin=0, color=0 component, plane passing fox t=0,x=0
+            chi = numpy.real(psi.data_component((0,0)).data_slice((0,0)))
+            Canvas().imshow(chi).save('img%s.png' % k)
+            phi,psi = psi,phi
+            
 if __name__=='__main__':
     unittest.main()
 

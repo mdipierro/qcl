@@ -63,6 +63,21 @@ inline struct shift_t idx2shift(const size_t idx, const struct bbox_t *bbox) {
   return shift;
 }
 
+inline double idx2eta(const size_t idx, const int mu, 
+		      const struct bbox_t *bbox) {
+  int dd, tmp=0;
+  size_t i=idx;
+  for(int k=MAXD-1; k>=0; k--) {
+    if((*bbox).d[k]>0) {
+      dd = (*bbox).d[k];
+      if(k<mu) tmp += i % dd - (*bbox).b[k];
+      i = i / dd;
+    }
+  }
+  assert(i==0);
+  return (tmp % 2==0)?(+1.0):(-1.0);
+}
+
 inline struct shift_t shiftdelta(const struct shift_t shift,
 				 const struct shift_t delta)
 {
@@ -343,8 +358,6 @@ kernel void heatbath(global cfloat_t *U,
 kernel void fermi_operator(global cfloat_t *phi,
 			   global cfloat_t *U,	
 			   global cfloat_t *psi,
-			   int nspin,
-			   int nc,
 			   struct bbox_t bbox) {
 
   size_t gid = get_global_id(0);
@@ -353,25 +366,29 @@ kernel void fermi_operator(global cfloat_t *phi,
   global cfloat_t *p;
   global cfloat_t *q;
   struct shift_t delta;
-  int n = nc;
   cfloat_t path[MAXN*MAXN];
   cfloat_t spinor[MAXN*MAXN];
   cfloat_t coeff;
 
-  /*
-  aux0(path,U,idx,&bbox);
-  delta.s[0]=...;
-  delta.s[1]=...;
-  idx2 = idx2idx_shift(idx,delta,&bbox);
-  q = phi2+idx*nspin*nc;
-  spinor[0*nc+0] = coeff*q[0*nc+0]; // for each spin conponent
-  for(int spin=0; spin<nspin; spin++) {
-    q = spinor[spin*nc];
-    p = phi+idx*nspin*nc+spin*nc;    
-    p[0].x = path* q[0].x...;
-    p[1].x = path* q[1].x...;
-  }
-  */
   //[inject:fermi_operator]  
+}
+
+
+kernel void staggered_operator(global cfloat_t *phi,
+			       global cfloat_t *U,	
+			       global cfloat_t *psi,
+			       struct bbox_t bbox) {
+
+  size_t gid = get_global_id(0);
+  size_t idx = gid2idx(gid,&bbox);
+  size_t idx2;
+  global cfloat_t *p;
+  global cfloat_t *q;
+  struct shift_t delta;
+  cfloat_t path[MAXN*MAXN];
+  cfloat_t spinor;
+  cfloat_t coeff;
+
+  //[inject:staggered_operator]  
 }
 
