@@ -760,7 +760,7 @@ class FermiOperator(object):
     def __init__(self,lattice):
         self.lattice = lattice
         self.terms = []
-    def add_term(self,coefficient,gamma,paths):
+    def add_term(self,gamma,paths):
         """
         Paths are symmetrized. For example: 
         >>> wilson = FermionOperator(lattice).add_term(
@@ -788,8 +788,18 @@ class FermiOperator(object):
         coefficients,paths = [], []
         k = 0
         action = ''
-        nspin = psi.siteshape[0]
-        nc = U.siteshape[2]
+        shapeu = U.siteshape
+        if len(shapeu)!=3 or shapeu[1]!=shapeu[2]: raise RuntimeError
+        shapep = psi.siteshape
+        if shapeu[2]!=shapep[-1]: raise RuntimeError
+        if len(shapep)==2:
+            is_staggered = False
+            nspin = shapep[0]
+        elif len(shapep)==1:
+            nspin = 1
+        else:
+            raise RuntimeError
+        nc = shapeu[2]
         for gamma, opaths in self.terms:
             code += opencl_paths(function_name = name+str(k),
                                  lattice = self.lattice,
@@ -800,25 +810,28 @@ class FermiOperator(object):
                                  trace = False)
             
             k += 1
+        
         action = opencl_fermi_operator(self.terms,U.lattice.d,nspin,nc,name)
-        source = makesource({'paths':code,'fermi_operator':action})
+        if nspin>1:
+            source = makesource({'paths':code,'fermi_operator':action})
+        else:
+            source = makesource({'paths':code,'staggered_operator':action})
         def runner(source,self=self,phi=phi,U=U,psi=psi):
-            shapeu = U.siteshape
-            if len(shapeu)!=3 or shapeu[1]!=shapeu[2]: raise RuntimeError
-            shapep = psi.siteshape
-            if len(shapep)!=2 or shapeu[2]!=shapep[1]: raise RuntimeError
 
             phi_buffer = U.lattice.comm.buffer('rw',phi.data)
             U_buffer = U.lattice.comm.buffer('r',U.data)
             psi_buffer = U.lattice.comm.buffer('r',psi.data)
-
             prg = U.lattice.comm.compile(source)
-            event = prg.fermi_operator(U.lattice.comm.queue,
-                                       (U.lattice.size,),None,
-                                       phi_buffer,
-                                       U_buffer,
-                                       psi_buffer,
-                                       U.lattice.bbox)
+            if nspin>1:
+                meta_event = prg.fermi_operator
+            else:
+                meta_event = prg.staggered_operator
+            event = meta_event(U.lattice.comm.queue,
+                               (U.lattice.size,),None,
+                               phi_buffer,
+                               U_buffer,
+                               psi_buffer,
+                               U.lattice.bbox)
             if DEBUG:
                 print 'waiting'
             event.wait()
@@ -1267,35 +1280,45 @@ def opencl_fermi_operator(terms,d,nspin,nc,name='aux'):
         for i in range(d): code.append('delta.s[%s] = %s;' % (i, site[i]));
         code.append('p = phi+idx*%s;' % (nspin*nc));
         code.append('q = psi+idx2idx_shift(idx,delta,&bbox)*%s;' % (nspin*nc));
-        nspin = gamma.shape[0]
         spinor = [0]*(nspin*nc)
-        for r in range(nspin):
-            for i in range(nc):
-                k = (r*nc+i)
-                spinor[k] = 0+0j
-                line = 'spinor[%s].x =' % k
-                for c in range(nspin):
-                    coeff = gamma[r,c]
-                    if coeff.real:
-                        line+="+ (%s)*q[%s].x" % (coeff.real,c*nc+i)
-                        spinor[k] += 1
-                    if coeff.imag:
-                        line+="- (%s)*q[%s].y" % (coeff.imag,c*nc+i)
-                        spinor[k] += 1
-                line+=';'
-                if spinor[k].real: code.append(line)
-                line = 'spinor[%s].y =' % k
-                for c in range(nspin):
-                    coeff = gamma[r,c]
-                    if coeff.real:
-                        line+="+ (%s)*q[%s].y" % (coeff.real,c*nc+i)
-                        spinor[k] += 1j                        
-                    if coeff.imag:
-                        line+="+ (%s)*q[%s].x" % (coeff.imag,c*nc+i)
-                        spinor[k] += 1j
-                line+=';'
-                if spinor[k].imag: code.append(line)
-
+        if nspin>1:
+            for r in range(nspin):
+                for i in range(nc):
+                    k = (r*nc+i)
+                    spinor[k] = 0+0j
+                    line = 'spinor[%s].x =' % k
+                    for c in range(nspin):
+                        coeff = gamma[r,c]
+                        if coeff.real:
+                            line+="+ (%s)*q[%s].x" % (coeff.real,c*nc+i)
+                            spinor[k] += 1
+                        if coeff.imag:
+                            line+="- (%s)*q[%s].y" % (coeff.imag,c*nc+i)
+                            spinor[k] += 1
+                    line+=';'
+                    if spinor[k].real: code.append(line)
+                    line = 'spinor[%s].y =' % k
+                    for c in range(nspin):
+                        coeff = gamma[r,c]
+                        if coeff.real:
+                            line+="+ (%s)*q[%s].y" % (coeff.real,c*nc+i)
+                            spinor[k] += 1j                        
+                        if coeff.imag:
+                            line+="+ (%s)*q[%s].x" % (coeff.imag,c*nc+i)
+                            spinor[k] += 1j
+                    line+=';'
+                    if spinor[k].imag: code.append(line)
+        else:
+            (coeff, mu) = gamma
+            line = 'coeff = %s * idx2eta(idx,%s,&bbox);' % (coeff, mu % d)
+            code.append(line)
+            for k in range(nc):
+                line = 'spinor[%s].x = coeff*q[%s].x;' % (k,k)
+                code.append(line)
+                spinor[k] += 1
+                line = 'spinor[%s].y = coeff*q[%s].y;' % (k,k)
+                code.append(line)
+                spinor[k] += 1j
         for r in range(nspin):
             for i in range(nc):
                 counter = 0
@@ -1467,15 +1490,40 @@ class TestFermions(unittest.TestCase):
         psi[p,0,0] = 100.0
         wilson = FermiOperator(space)
         for mu in (1,2,3,4):
-            wilson.add_term(kappa, r*I-gamma[mu], [(mu,)])
-            wilson.add_term(kappa, r*I+gamma[mu], [(-mu,)])
+            wilson.add_term(kappa*(r*I-gamma[mu]), [(mu,)])
+            wilson.add_term(kappa*(r*I+gamma[mu]), [(-mu,)])
         for k in range(10):                        
             wilson.multiply(phi,U,psi).run()
             # project spin=0, color=0 component, plane passing fox t=0,x=0
             chi = numpy.real(psi.data_component((0,0)).data_slice((0,0)))
             Canvas().imshow(chi).save('img%s.png' % k)
             phi,psi = psi,phi
-            
+
+    def test_staggered_action(self):
+        N, nc = 16, 3
+        r = 1.0
+        kappa = 0.1234
+
+        comm = Communicator()
+        space = comm.Lattice((N,N,N,N))
+        U = space.Field((space.d,nc,nc))
+        psi = space.Field((nc,))        
+        phi = space.Field((nc,))
+
+        U.set_cold()
+        p = space.Site((0,0,N/2,N/2))
+        psi[p,0] = 100.0
+        wilson = FermiOperator(space)
+        for mu in (1,2,3,4):            
+            wilson.add_term((kappa, mu), [(mu,)])
+            wilson.add_term((kappa, mu), [(-mu,)])
+        for k in range(100):                        
+            wilson.multiply(phi,U,psi).run()
+            # project color=0 component, plane passing fox t=0,x=0
+            chi = numpy.real(psi.data_component((0,)).data_slice((0,0)))
+            Canvas().imshow(chi).save('img%s.png' % k)
+            phi,psi = psi,phi
+        
 if __name__=='__main__':
     unittest.main()
 

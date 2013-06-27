@@ -386,8 +386,8 @@ kernel void staggered_operator(global cfloat_t *phi,
   global cfloat_t *q;
   struct shift_t delta;
   cfloat_t path[MAXN*MAXN];
-  cfloat_t spinor;
-  cfloat_t coeff;
+  cfloat_t spinor[MAXN];
+  double coeff;
 
   //[inject:staggered_operator]  
 }
