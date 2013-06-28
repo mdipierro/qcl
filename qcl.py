@@ -492,7 +492,7 @@ class Field(object):
             else: raise NotImplementedError
         else:
             if self.data.shape != other.data.shape: raise RuntimeError
-            self.data -= other
+            self.data -= other.data
         return self
     def __rmul__(self,other):
         """ Maps a += c*b into a.add_scaled(c,b) for a,b arrays """
@@ -504,6 +504,8 @@ class Field(object):
         for i in xrange(0,size,n):
             self.data.flat[i:i+n] += scale*other.data.flat[i:i+n]
         return self
+    def __getitem__(self, start, stop, step):
+        return self.data[start:stop:step]
     def __mul__(self,other):
         """
         Computes scalar product of two Fields
@@ -931,17 +933,6 @@ class Lambda(object):
         return self.matrices[i]
 
 
-class Action(object):
-    """
-    Container for an arbitrary action, to be used for HMC, etc. (not implemented)
-    """
-    def __init__(self,U,parameters):
-        pass
-
-def BiCGStabInverter(phi,psi,action):
-    pass
-
-
 # ###########################################################
 # Part II, paths and symmetries
 # ###########################################################
@@ -1366,6 +1357,54 @@ def opencl_fermi_operator(terms,d,nspin,nc,name='aux'):
     return '\n'.join(code)
 
 # ###########################################################
+# inverters
+# ###########################################################
+
+def invert_minimum_residue(y,f,x,ap=1e-4,rp=1e-4,ns=200):
+    q = numpy.empty_like(x)
+    y[:] = x
+    f(q,x)
+    r = x-q
+    for k in xrange(ns):
+        f(q,r)
+        alpha = numpy.vdot(q,r)/numpy.vdot(q,q)
+        y += alpha*r
+        r -= alpha*q
+        residue = math.sqrt(numpy.vdot(r,r)/r.size)
+        norm = math.sqrt(numpy.vdot(y,y))
+        if residue<max(ap,norm*rp): return y
+    raise ArithmeticError, 'no convergence'
+
+def invert_bicgstab(y,f,x,ap=1e-4,rp=1e-4,ns=200):
+    p = numpy.empty_like(x)
+    q = numpy.empty_like(x)
+    t = numpy.empty_like(x)
+    r = numpy.empty_like(x)
+    s = numpy.empty_like(x)
+    y[:] = x
+    f(r,y)
+    r *= -1
+    r += x
+    q[:] = r
+    rho_old = alpha = omega = 1.0
+    for k in xrange(10):
+        rho = numpy.vdot(q,r)
+        beta = (rho/rho_old)*(alpha/omega)
+        rho_old = rho
+        p = beta*p + r - (beta*omega)*s
+        f(s,p)
+        alpha = rho/numpy.vdot(q,s)
+        r -= alpha*s
+        f(t,r)
+        omega = numpy.vdot(t,r)/numpy.vdot(t,t)
+        y += omega*r + alpha*p
+        residue = math.sqrt(numpy.vdot(r,r)/r.size)
+        norm = math.sqrt(numpy.vdot(y,y))     
+        if residue<max(ap,norm*rp): return y
+        r -= omega *t
+    raise ArithmeticError, 'no convergence'
+
+# ###########################################################
 # Tests
 # ###########################################################
 
@@ -1542,8 +1581,66 @@ class TestFermions(unittest.TestCase):
             chi = numpy.real(psi.data_component((0,)).data_slice((0,0)))
             Canvas().imshow(chi).save('staggered.%s.png' % k)
             phi,psi = psi,phi
-        
+
+
+class TestInverters(unittest.TestCase):
+    def test_minimum_residue(self):
+        def f(a,b):
+            a[0,0] = b[0,0] 
+            a[0,1] = 0.1*b[0,1] 
+            a[1,0] = 0.2*b[1,0] 
+            a[1,1] = b[1,1] 
+        a = numpy.array([[1.0,2.0],[3.0,4.0]])
+        b = numpy.array([[0.0,0.0],[0.0,0.0]])
+        c = numpy.array([[0.0,0.0],[0.0,0.0]])
+        invert_minimum_residue(b,f,a)
+        f(c,b)
+        # print a
+        print c
+        print a
+
+    def test_bicgstab(self):
+        def f(a,b):
+            a[0,0] = b[0,0] 
+            a[0,1] = 0.1*b[0,1] 
+            a[1,0] = 0.2*b[1,0] 
+            a[1,1] = b[1,1] 
+        a = numpy.array([[1.0,2.0],[3.0,4.0]])
+        b = numpy.array([[0.0,0.0],[0.0,0.0]])
+        c = numpy.array([[0.0,0.0],[0.0,0.0]])
+        invert_bicgstab(b,f,a)
+        f(c,b)
+        # print a
+        print c
+        print a
+
+    def test_fermion_propagator(self):
+        N, nspin, nc = 9, 4, 3
+        r = 1.0
+        kappa = 0.1234
+        I = identity(4)
+        gamma = Gamma('fermilab')
+
+        comm = Communicator()
+        space = comm.Lattice((N,N,N,N))
+        U = space.Field((space.d,nc,nc))
+        psi = space.Field((nspin,nc))        
+        phi = space.Field((nspin,nc))
+
+        U.set_cold()
+        p = space.Site((0,0,4,4))
+        psi[p,0,0] = 100.0
+        wilson = FermiOperator(space)
+        wilson.add_term(1.0, None)
+        for mu in (1,2,3,4):
+            wilson.add_term(kappa*(r*I-gamma[mu]), [(mu,)])
+            wilson.add_term(kappa*(r*I+gamma[mu]), [(-mu,)])
+        Dslash = lambda y,x,U=U: wilson.multiply(y,U,x).run()
+        invert_bicgstab(phi.data,Dslash,psi.data)
+        chi = numpy.real(phi.data_component((0,0)).data_slice((0,0)))
+        Canvas().imshow(chi).save('fermi.prop.png')
+
 if __name__=='__main__':
     unittest.main()
-
+    
 
