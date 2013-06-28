@@ -200,7 +200,7 @@ def listify(items):
     elif isinstance(items,list):
         return items
     else:
-        raise ValueError, "expected a list"
+        raise ValueError("expected a list")
 
 def makesource(vars=None,filename='kernels/qcl-core.c'):
     """ Loads and compiles a kernel """
@@ -232,7 +232,7 @@ class Communicator(object):
     """
     def __init__(self):
         if not cl:
-            raise RuntimeError, 'pyOpenCL is not available'
+            raise RuntimeError('pyOpenCL is not available')
         self.platforms = cl.get_platforms()
         self.ctx = cl.create_some_context()
         self.queue = cl.CommandQueue(self.ctx)
@@ -342,7 +342,7 @@ class Lattice(object):
     def coords2global(self,coords):
         """ Converts (t,x,y,z) coordinates into global index """
         if len(coords)!=len(self.dims):
-            raise RuntimeError, "invalid conversion"
+            raise RuntimeError("invalid conversion")
         return sum(p*product(self.dims[i+1:]) \
                        for i,p in enumerate(coords))
     def global2coords(self,i):
@@ -447,7 +447,7 @@ class Field(object):
         if not (self.lattice == self.lattice and
                 self.siteshape==other.siteshape and
                 self.sitesize == other.sitesize):
-            raise TypeError, "Cannot copy incompatible fields"
+            raise TypeError("Cannot copy incompatible fields")
         self.dtype = other.dtype
         self.data[:] = other.data
     def data_component(self,component):
@@ -660,7 +660,7 @@ class Field(object):
                     print idx, mu, U
                     if not is_unitary(U):
                         print U*hermitian(U), 'FAIL!'
-            raise RuntimeError, "U is not unitary"
+            raise RuntimeError("U is not unitary")
 
     def average_plaquette(self,shape=(1,2,-1,-2),paths=None):
         """
@@ -694,7 +694,7 @@ class GaugeAction(object):
             paths = bc_symmetrize(paths,d=self.lattice.d)
             paths = remove_duplicates(paths,bidirectional=False)
         elif not (isinstance(paths,list) or not isinstance(paths[0],tuple)):
-            raise RuntimeError, "not a valid action term" 
+            raise RuntimeError("not a valid action term")
         self.terms.append((coefficient,paths))
         return self
     def heatbath(self,U,beta,n_iter=1,m_iter=1,name='aux'):
@@ -760,8 +760,14 @@ class FermiOperator(object):
     def __init__(self,lattice):
         self.lattice = lattice
         self.terms = []
-    def add_term(self,gamma,paths):
+    def add_term(self, gamma, paths=None):
         """
+        gamma is a NspinxNspin Gamma matrix for Wilson fermions
+        gamma is (coefficient, mu) for staggered (mu = 1,2,3 or 4)
+        gamma is a number when paths is None (the identity term)
+
+        if paths is None than psi = gamma * phi
+ 
         Paths are symmetrized. For example: 
         >>> wilson = FermionOperator(lattice).add_term(
             kappa,(1-Gamma[0]),path = [(4,)])
@@ -770,9 +776,17 @@ class FermiOperator(object):
         >>> wilson = FermionOperator(lattice).add_term(
             c_sw,Gamma[mu][nu],path = [()],em_field,(mu,nu))
         """
-        if not (isinstance(paths,list) or not isinstance(paths[0],tuple)):
-            raise RuntimeError, "not a valid action term" 
-        self.terms.append((gamma,paths))
+        if paths is None:
+            if self.terms and self.terms[0][1] is None:
+                raise RuntimeError("cannot have two terms without paths")
+            if not isinstance(gamma,(int,float)):
+                raise RuntimeError("gamma must be a simple number of no paths")
+            self.terms.insert(0,(gamma,paths))
+        elif isinstance(paths,list) and len(paths)==1 and \
+                isinstance(paths[0],tuple):
+            self.terms.append((gamma,paths))
+        else:
+            raise RuntimeError("invalid Path")
         return self
     def multiply(self,phi,U,psi,name='aux'):
         """
@@ -801,16 +815,16 @@ class FermiOperator(object):
             raise RuntimeError
         nc = shapeu[2]
         for gamma, opaths in self.terms:
-            code += opencl_paths(function_name = name+str(k),
-                                 lattice = self.lattice,
-                                 coefficients=[1.0],
-                                 paths=opaths,
-                                 nc = nc,
-                                 initialize = True,
-                                 trace = False)
+            if isinstance(opaths,list):
+                code += opencl_paths(function_name = name+str(k),
+                                     lattice = self.lattice,
+                                     coefficients=[1.0],
+                                     paths=opaths,
+                                     nc = nc,
+                                     initialize = True,
+                                     trace = False)
             
-            k += 1
-        
+                k += 1
         action = opencl_fermi_operator(self.terms,U.lattice.d,nspin,nc,name)
         if nspin>1:
             source = makesource({'paths':code,'fermi_operator':action})
@@ -873,7 +887,7 @@ class Gamma(object):
                       [[0,0,0,1],[0,0,-1,0],[0,-1,0,0],[1,0,0,0]],
                       [[0,0,1j,0],[0,0,0,-1j],[-1j,0,0,0],[0,1j,0,0]]]
         else:
-            raise RuntimeError, "unknown gamma matrices representation"
+            raise RuntimeError("unknown gamma matrices representation")
         self.matrices = [numpy.matrix(gamma) for gamma in gammas]
         self.matrices.append(self.matrices[0]) # gamma[4] same as gamma[0]
         # comupte Gamma[5]
@@ -962,7 +976,7 @@ def bc_symmetrize(path=[+1,+2,+4,-1,-2,-4],d=4,positive_only=False):
         newpath = tuple(rotate(mu) for mu in path)
         # each path should be unique
         if newpath in paths:
-            raise RuntimeError, "accidental double counting"
+            raise RuntimeError("accidental double counting")
         paths.append(newpath)
     return paths
 
@@ -1268,11 +1282,14 @@ def opencl_paths(function_name, # name of the generated function
 def opencl_fermi_operator(terms,d,nspin,nc,name='aux'):
     code = []
     h = 0 
-    for r in range(nspin):
-        for i in range(nc):
-            a,b = nspin*nc, r*nc+i            
-            code.append('phi[idx*%s+%s] = psi[idx*%s+%s];' % (a,b,a,b))
     for gamma, opaths in terms:
+        if opaths is None:
+            for r in range(nspin):
+                for i in range(nc):
+                    code.append('idx2=idx*%s+%s;' % (nspin*nc, r*nc+i))
+                    code.append('phi[idx2].x = %s*psi[idx2].x;' % gamma)
+                    code.append('phi[idx2].y = %s*psi[idx2].y;' % gamma)
+            continue
         code.append("%s%s(path,U,idx,&bbox);" % (name,h))        
         path = opaths[0]
         site = [0]*d
@@ -1489,6 +1506,7 @@ class TestFermions(unittest.TestCase):
         p = space.Site((0,0,4,4))
         psi[p,0,0] = 100.0
         wilson = FermiOperator(space)
+        wilson.add_term(1.0, None)
         for mu in (1,2,3,4):
             wilson.add_term(kappa*(r*I-gamma[mu]), [(mu,)])
             wilson.add_term(kappa*(r*I+gamma[mu]), [(-mu,)])
@@ -1496,7 +1514,7 @@ class TestFermions(unittest.TestCase):
             wilson.multiply(phi,U,psi).run()
             # project spin=0, color=0 component, plane passing fox t=0,x=0
             chi = numpy.real(psi.data_component((0,0)).data_slice((0,0)))
-            Canvas().imshow(chi).save('img%s.png' % k)
+            Canvas().imshow(chi).save('fermi.%s.png' % k)
             phi,psi = psi,phi
 
     def test_staggered_action(self):
@@ -1514,14 +1532,15 @@ class TestFermions(unittest.TestCase):
         p = space.Site((0,0,N/2,N/2))
         psi[p,0] = 100.0
         wilson = FermiOperator(space)
-        for mu in (1,2,3,4):            
+        wilson.add_term(1.0, None)
+        for mu in (1,2,3,4):
             wilson.add_term((kappa, mu), [(mu,)])
             wilson.add_term((kappa, mu), [(-mu,)])
         for k in range(100):                        
             wilson.multiply(phi,U,psi).run()
             # project color=0 component, plane passing fox t=0,x=0
             chi = numpy.real(psi.data_component((0,)).data_slice((0,0)))
-            Canvas().imshow(chi).save('img%s.png' % k)
+            Canvas().imshow(chi).save('staggered.%s.png' % k)
             phi,psi = psi,phi
         
 if __name__=='__main__':
