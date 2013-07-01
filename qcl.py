@@ -433,10 +433,13 @@ class Field(object):
         self.lattice = lattice
         self.siteshape = listify(siteshape)
         self.sitesize = product(self.siteshape)
+        self.size = lattice.size * self.sitesize
         self.dtype = dtype
         self.data = numpy.zeros([self.lattice.size]+self.siteshape,dtype=dtype)
         if DEBUG: 
             print 'allocating %sbytes' % int(self.lattice.size*self.sitesize*8)
+    def clone(self):
+        return Field(lattice=self.lattice,siteshape=self.siteshape,dtype=self.dtype)
     def copy(self,other):
         """
         Makes a copy of field b into field a
@@ -482,7 +485,7 @@ class Field(object):
             else: raise NotImplementedError
         else:
             if self.data.shape != other.data.shape: raise RuntimeError
-            self.data += other
+            self.data += other.data
         return self
     def __isub__(self,other):
         """ a -= b """
@@ -496,6 +499,12 @@ class Field(object):
     def __rmul__(self,other):
         """ Maps a += c*b into a.add_scaled(c,b) for a,b arrays """
         return Op('*',other,self)
+    def __add__(self,other):
+        """ Stores a + b """
+        raise NotImplementedError
+    def __sub__(self,other):
+        """ Maps a - b """
+        raise NotImplementedError
     def add_scaled(self,scale,other,n=1000000):
         """ a.add_scaled(c,b) is the same as a[:]=c*b[:] """
         if self.data.shape != other.data.shape: raise RuntimeError
@@ -513,8 +522,8 @@ class Field(object):
         """
         if self.lattice.parallel: raise NotImplementedError
         if self.data.shape != other.data.shape: raise RuntimeError
-        f = numpy.vdot if self.dtype in COMPLEX_TYPES else numpy.dot
-        return f(self.data,other.data)
+        vdot = numpy.vdot if self.dtype in COMPLEX_TYPES else numpy.dot
+        return vdot(self.data,other.data)
     def __getitem__(self,args):
         """ Do not use these to implement algorithms - too slow """
         site, args = args[0], args[1:]
@@ -1359,48 +1368,76 @@ def opencl_fermi_operator(terms,d,nspin,nc,name='aux'):
 # inverters
 # ###########################################################
 
+def copy_elements(a,b):
+    if isinstance(a,Field) and isinstance(b,Field):
+        a.copy(b)
+    elif a.shape == b.shape:
+        a[:] = b
+    else:
+        raise RuntimeError("Incompatible shape")
+        
+
+def vdot(a,b):
+    if isinstance(a,Field) and isinstance(b,Field):
+        return a*b
+    elif a.shape == b.shape:
+        return numpy.vdot(a,b)
+    else:
+        raise RuntimeError("Incompatible shape")
+
+def clone(a):
+    if isinstance(a,Field):
+        return a.clone()
+    else:
+        return numpy.empty_like(a)
+
 def invert_minimum_residue(y,f,x,ap=1e-4,rp=1e-4,ns=200):
-    q = numpy.empty_like(x)
-    y[:] = x
+    q = clone(x)
+    r = clone(x)
+    copy_elements(y, x) # x-> y
+    copy_elements(r, x)
     f(q,x)
-    r = x-q
+    r -= q
     for k in xrange(ns):
         f(q,r)
-        alpha = numpy.vdot(q,r)/numpy.vdot(q,q)
+        alpha = vdot(q,r)/vdot(q,q)
         y += alpha*r
         r -= alpha*q
-        residue = math.sqrt(numpy.vdot(r,r)/r.size)
-        norm = math.sqrt(numpy.vdot(y,y))
+        residue = math.sqrt(vdot(r,r).real/r.size)
+        norm = math.sqrt(vdot(y,y).real)
         if residue<max(ap,norm*rp): return y
     raise ArithmeticError, 'no convergence'
 
 def invert_bicgstab(y,f,x,ap=1e-4,rp=1e-4,ns=200):
-    p = numpy.empty_like(x)
-    q = numpy.empty_like(x)
-    t = numpy.empty_like(x)
-    r = numpy.empty_like(x)
-    s = numpy.empty_like(x)
-    y[:] = x
+    p = clone(x)
+    q = clone(x)
+    t = clone(x)
+    r = clone(x)
+    s = clone(x)
+    copy_elements(y, x)
     f(r,y)
     r *= -1
     r += x
-    q[:] = r
+    copy_elements(q, r)
     rho_old = alpha = omega = 1.0
     for k in xrange(10):
-        rho = numpy.vdot(q,r)
+        rho = vdot(q,r)
         beta = (rho/rho_old)*(alpha/omega)
         rho_old = rho
-        p = beta*p + r - (beta*omega)*s
+        p *= beta
+        p += r 
+        p -= (beta*omega) * s
         f(s,p)
-        alpha = rho/numpy.vdot(q,s)
-        r -= alpha*s
+        alpha = rho/vdot(q,s)
+        r -= alpha * s
         f(t,r)
-        omega = numpy.vdot(t,r)/numpy.vdot(t,t)
-        y += omega*r + alpha*p
-        residue = math.sqrt(numpy.vdot(r,r)/r.size)
-        norm = math.sqrt(numpy.vdot(y,y))     
+        omega = vdot(t,r)/vdot(t,t)
+        y += omega * r 
+        y += alpha * p
+        residue = math.sqrt(vdot(r,r).real/r.size)
+        norm = math.sqrt(vdot(y,y).real)     
         if residue<max(ap,norm*rp): return y
-        r -= omega *t
+        r -= omega * t
     raise ArithmeticError, 'no convergence'
 
 # ###########################################################
@@ -1607,11 +1644,12 @@ class TestInverters(unittest.TestCase):
         c = numpy.array([[0.0,0.0],[0.0,0.0]])
         invert_bicgstab(b,f,a)
         f(c,b)
+        print a
+        print b
+        print c
         assert numpy.linalg.norm(c-a)<0.02
 
     def test_fermion_propagator(self):
-        return 
-
         N, nspin, nc = 9, 4, 3
         r = 1.0
         kappa = 0.1234
@@ -1633,9 +1671,15 @@ class TestInverters(unittest.TestCase):
             wilson.add_term(kappa*(r*I-gamma[mu]), [(mu,)])
             wilson.add_term(kappa*(r*I+gamma[mu]), [(-mu,)])
         Dslash = lambda y,x,U=U: wilson.multiply(y,U,x).run()
-        invert_bicgstab(phi.data,Dslash,psi.data)
+        invert_bicgstab(phi,Dslash,psi)
         chi = numpy.real(phi.data_component((0,0)).data_slice((0,0)))
         Canvas().imshow(chi).save('fermi.prop.png')
+        out = space.Field((nspin,nc))
+        wilson.multiply(out,U,phi).run()
+        chi = numpy.real(out.data_component((0,0)).data_slice((0,0)))
+        Canvas().imshow(chi).save('fermi.out.png')
+        chi = numpy.real(psi.data_component((0,0)).data_slice((0,0)))
+        Canvas().imshow(chi).save('fermi.in.png')
 
 if __name__=='__main__':
     unittest.main()
