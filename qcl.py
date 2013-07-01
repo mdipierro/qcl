@@ -432,7 +432,6 @@ class Field(object):
     def __init__(self, lattice, siteshape, dtype=numpy.complex64):
         self.lattice = lattice
         self.siteshape = listify(siteshape)
-        self.size = product(self.siteshape)
         self.sitesize = product(self.siteshape)
         self.dtype = dtype
         self.data = numpy.zeros([self.lattice.size]+self.siteshape,dtype=dtype)
