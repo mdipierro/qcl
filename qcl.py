@@ -786,11 +786,13 @@ class FermiOperator(object):
     """
     Class to store paths and coefficients relative to any gauge action
     """
-    def __init__(self,lattice,gauge,name='aux'):
-        self.lattice = lattice
+    def __init__(self,U,extra_fields=None,name='aux'):
         self.terms = []
-        self.gauge = gauge
-        self.name = name
+        self.U = U
+        self.extra_fields = extra_fields or []
+        self.lattice = U.lattice
+        self.name = name or random_name()
+        self.extra = range(len(extra_fields))
     def add_term(self, gamma, paths=None):
         """
         gamma is a NspinxNspin Gamma matrix for Wilson fermions
@@ -800,12 +802,12 @@ class FermiOperator(object):
         if paths is None than psi = gamma * phi
  
         Paths are symmetrized. For example: 
-        >>> wilson = FermionOperator(lattice).add_term(
+        >>> wilson = FermiOperator(U).add_term(
             kappa,(1-Gamma[0]),path = [(4,)])
-        >>> wilson = FermionOperator(lattice).add_term(
+        >>> wilson = FermiOperator(U).add_term(
             kappa,(1+Gamma[0]),path = [(-4,)])
-        >>> wilson = FermionOperator(lattice).add_term(
-            c_sw,Gamma[mu][nu],path = [()],em_field,(mu,nu))
+        >>> wilson = FermiOperator(U).add_term(
+            c_sw,Gamma[0][1],path = self.extra[0])
         """
         if paths is None:
             if self.terms and self.terms[0][1] is None:
@@ -816,6 +818,8 @@ class FermiOperator(object):
         elif isinstance(paths,list) and len(paths)==1 and \
                 isinstance(paths[0],tuple):
             self.terms.append((gamma,paths))
+#        elif isinstance(paths,int) and paths in self.extra:
+#            self.terms.append((gamma,paths))
         else:
             raise RuntimeError("invalid Path")
         return self
@@ -830,11 +834,8 @@ class FermiOperator(object):
         >>> wilson = GaugeAction(lattice).add_term(1.0,paths = (1,2,-1,-2)) 
         >>> wilson.heatbath(beta,n_iter=10)
         """
-        if isinstance(self.gauge,(list,tuple)):
-            U, extra_fields = self.gauge[0], self.gauge[1:]
-        else:
-            U, extra_fields = self.gauge, []
-        name = self.name or random_name()
+        U, extra_fields = self.U, self.extra_fields
+        name = self.name
         code = ''
         coefficients,paths = [], []
         k = 0
@@ -1626,7 +1627,7 @@ class TestFermions(unittest.TestCase):
         U.set_cold()
         p = space.Site((0,0,4,4))
         psi[p,0,0] = 100.0
-        Dslash = FermiOperator(space,U)
+        Dslash = FermiOperator(U)
         Dslash.add_term(1.0, None)
         for mu in (1,2,3,4):
             Dslash.add_term(kappa*(r*I-gamma[mu]), [(mu,)])
@@ -1652,7 +1653,7 @@ class TestFermions(unittest.TestCase):
         U.set_cold()
         p = space.Site((0,0,N/2,N/2))
         psi[p,0] = 100.0
-        Dslash = FermiOperator(space,U)
+        Dslash = FermiOperator(U)
         Dslash.add_term(1.0, None)
         for mu in (1,2,3,4):
             Dslash.add_term((kappa, mu), [(mu,)])
@@ -1711,7 +1712,7 @@ class TestInverters(unittest.TestCase):
         U.set_cold()
         p = space.Site((0,0,4,4))
         psi[p,0,0] = 100.0
-        Dslash = FermiOperator(space,U)
+        Dslash = FermiOperator(U)
         Dslash.add_term(1.0, None)
         for mu in (1,2,3,4):
             Dslash.add_term(kappa*(r*I-gamma[mu]), [(mu,)])
@@ -1750,7 +1751,7 @@ def test():
         p = space.Site((0,0,4,4))
         psi[p,0,0] = 100.0
         if True:
-            Dslash = FermiOperator(space,[U]+clover)
+            Dslash = FermiOperator(U,extra_fields=clover)
             Dslash.add_term(1.0, None)
             for mu in (1,2,3,4):
                 Dslash.add_term(kappa*(r*I-gamma[mu]), [(mu,)])
