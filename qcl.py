@@ -574,18 +574,18 @@ class Field(object):
         if not IGNORE_NOT_IMPLEMENTED: raise NotImplementedError
         return self
 
-    def set_link_product(self,U,paths,trace=True,name='aux'):
+    def set_link_product(self,U,paths,name='aux'):
         """
         Generates a kernel to set the field to the sum of specified product of links
         If trace == True the product of links is traced.
         name is the name of the generate OpenCL function which performs the 
         product of links.
         """
-        name = name or random_name()
+        name = name or random_name()        
         code = opencl_paths(function_name = name,
                             lattice = self.lattice,
                             coefficients = [1.0 for p in paths],
-                            paths=paths,                            
+                            paths = paths,                            
                             nc = U.data.shape[-1],
                             trace = (self.data.shape[-1]==1))
         source = makesource({'paths':code})
@@ -686,6 +686,25 @@ class Field(object):
         #for idx in xrange(self.lattice.size):
         #    print idx, phi.data[idx]
         return phi.sum()/(self.lattice.size*len(paths)*self.siteshape[-1])
+
+    def clover(self):
+        nc = self.siteshape[-1]
+        fields = []
+        for mui in range(0,self.lattice.d-1):
+            for nui in range(mui+1,self.lattice.d):
+                mu = mui if mui>0 else self.lattice.d 
+                nu = nui if nui>0 else self.lattice.d 
+                # comput forward clover leaf
+                paths = [(mu,nu,-mu,-nu),(nu,-mu,-nu,mu),(-mu,-nu,mu,nu),(-nu,mu,nu,-mu)]
+                code = self.lattice.Field((nc,nc)).set_link_product(self,paths)
+                component = code.run()
+                # reverse paths
+                paths = [(p[3],p[2],p[1],p[0]) for p in paths]
+                code = self.lattice.Field((nc,nc)).set_link_product(self,paths)
+                component -= code.run()
+                component *= 0.125
+                fields.append(component)
+        return fields
 
 class GaugeAction(object):
     """
@@ -1169,7 +1188,7 @@ def opencl_paths(function_name, # name of the generated function
         p = site
         #if DEBUG: print 'path:',path
         coeff = coefficients[ipath]
-        for z,mu in enumerate(path):            
+        for z,mu in enumerate(path):
             # print z, mu
             nu = abs(mu) % d
             if mu>0: key = (copy.copy(p.coords),(mu,)) # individual link key
@@ -1200,7 +1219,7 @@ def opencl_paths(function_name, # name of the generated function
                                 var = CX % (name,i,j)
                                 var2 = CX % (name2,j,i)
                                 code.append('%s.x = %s.x;' % (var2, var))
-                                code.append('%s.y = -%s.y;' % (var2, var))
+                                code.append('%s.y = -%s.y;' % (var2, var))                    
             # if this is a link but the first in path
             if z>0:
                 key = (site.coords,tuple(path[:z+1]))
@@ -1209,11 +1228,26 @@ def opencl_paths(function_name, # name of the generated function
                     name = NAME % len(matrices)
                     matrices[key] = name
                 else:
-                    name = matrices[key]
+                    name = matrices[key]                    
                 if not (site.coords,tuple(path[:z])) in matrices:
-                    print matrices.keys()
-                    print (site.coords,tuple(path[:z]))
-                    raise RuntimeError
+                    if z==1 and (site.coords,(-path[0],)) in matrices:
+                        mu = -path[0]
+                        key2 = (site.coords,(mu,)) # key for forward link
+                        key3 = (site.coords,(-mu,)) # key for backward link
+                        name2 = matrices[key2]
+                        name3 = NAME % len(matrices)                        
+                        matrices[key3] = name3 # name for new link
+                        for i in range(n):
+                            for j in range(n):
+                                var2 = CX % (name2,i,j)
+                                var3 = CX % (name3,j,i)
+                                code.append('%s.x = %s.x;' % (var3, var2))
+                                code.append('%s.y = -%s.y;' % (var3, var2))
+                    else:
+                        print matrices, (site.coords,tuple(path[:z]))
+                        print matrices.keys()
+                        print (site.coords,tuple(path[:z]))
+                        raise RuntimeError("Missing link")
                 name1 = matrices[(site.coords,tuple(path[:z]))]
                 name2 = matrices[link_key]
                 if mu>0: # if link forward
@@ -1701,6 +1735,10 @@ def test():
         phi = space.Field((nspin,nc))
 
         U.set_cold()
+
+        clover = U.clover()
+        print clover[0].data
+        """
         p = space.Site((0,0,4,4))
         psi[p,0,0] = 100.0
         if False:
@@ -1727,10 +1765,10 @@ def test():
             for i in range(3):
                 print 'fermi.%s.%s.real.vtk' % (spin,i)
                 psi.data_component((spin,i)).save('fermi.in.%s.%s.real.vtk' % (spin,i))
-
+        """
 
 if __name__=='__main__':
     # python -m unittest test_module.TestClass.test_method
     unittest.main()
-    
+    #test()
 
