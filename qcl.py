@@ -106,6 +106,12 @@ class Canvas(object):
 # Other Auxiliary function
 ##
 
+def is_single_path(path):
+    return isinstance(path,(list,tuple)) and all(isinstance(x,int) for x in path)
+
+def is_multiple_paths(paths):
+    return isinstance(paths,(list,tuple)) and all(is_single_path(x) for x in paths)
+
 def random_name():
     """ 
     Auxiliary function user to create a random sequence of alphanumeric characters
@@ -797,29 +803,29 @@ class GaugeAction(object):
         self.U = U
         self.lattice = U.lattice
         self.terms = []
-    def add_term(self,coefficient,paths):
+    def add_term(self,paths,coefficient=1.0):
         """
         Paths are symmetrized. For example: 
-        >>> wilson = GaugeAction(lattice).add_term(1.0,paths = (1,2,-1,-2)) 
+        >>> wilson = GaugeAction(lattice).add_term((1,2,-1,-2)) 
         is the Wilson action.
         """
-        if isinstance(paths,tuple):
+        if is_single_path(paths):
             paths = bc_symmetrize(paths,d=self.lattice.d)
-            paths = remove_duplicates(paths,bidirectional=False)
-        elif not (isinstance(paths,list) or not isinstance(paths[0],tuple)):
-            raise RuntimeError("not a valid action term")
+            paths = remove_duplicates(paths,bidirectional=False)            
+        elif not is_multiple(paths):
+            raise RuntimeError('invalid action term')
         self.terms.append((coefficient,paths))
         return self
 
     def add_plaquette_terms(self):
-        self.add_term(1.0,[(1,2,-1,-2)])
+        self.add_term((1,2,-1,-2),1.0)
         return self
 
     def heatbath(self,beta,n_iter=1,m_iter=1,name='aux'):
         """
         Generates a kernel which performs the SU(n) heatbath.
         Example:
-        >>> wilson = GaugeAction(lattice).add_term(1.0,paths = (1,2,-1,-2)) 
+        >>> wilson = GaugeAction(lattice).add_term((1,2,-1,-2)) 
         >>> wilson.heatbath(beta,n_iter=10)
         """
         U = self.U
@@ -883,7 +889,11 @@ class FermiOperator(object):
         self.lattice = U.lattice
         self.name = name or random_name()
         self.extra = range(len(extra_fields or []))
-    def add_term(self, gamma, paths=None):
+
+    def add_diagonal_term(self,gamma):
+        return self.add_term(gamma, paths=None)
+
+    def add_term(self, gamma, paths):
         """
         gamma is a NspinxNspin Gamma matrix for Wilson fermions
         gamma is (coefficient, mu) for staggered (mu = 1,2,3 or 4)
@@ -899,16 +909,15 @@ class FermiOperator(object):
         >>> wilson = FermiOperator(U).add_term(
             c_sw,Gamma[0][1],path = self.extra[0])
         """
-        if paths is None:
+        if paths is None: # diagonal term in operator
             if self.terms and self.terms[0][1] is None:
                 raise RuntimeError("cannot have two terms without paths")
             if not isinstance(gamma,(int,float)):
                 raise RuntimeError("gamma must be a simple number of no paths")
             self.terms.insert(0,(gamma,paths))
-        elif isinstance(paths,list) and len(paths)==1 and \
-                isinstance(paths[0],tuple):
+        elif is_multiple_paths(paths): # sum of shift terms
             self.terms.append((gamma,paths))
-        elif isinstance(paths,int) and paths in self.extra:
+        elif isinstance(paths,int) and paths in self.extra: # multiplication by extra fields
             self.terms.append((gamma,paths))
         else:
             raise RuntimeError("invalid Path")
@@ -916,7 +925,7 @@ class FermiOperator(object):
 
     # action specific helper functions
     def add_staggered_terms(self,kappa=1.0):
-        self.add_term(1.0, None)
+        self.add_diagonal_term(1.0)
         for mu in range(1,self.lattice.d+1):
             self.add_term((kappa, mu), [(+mu,)])
             self.add_term((kappa, mu), [(-mu,)])
@@ -933,7 +942,7 @@ class FermiOperator(object):
                            r=1.0,r_t=1.0,r_s=1.0,
                            gamma=Gamma('fermilab')):
         I = identity(4)
-        self.add_term(1.0, None)
+        self.add_diagonal_term(1.0)
         for mu in (1,2,3,4):
             k = kappa * (kappa_t if mu==4 else kappa_s)
             b = r * (r_t if mu==4 else r_s)
@@ -965,7 +974,7 @@ class FermiOperator(object):
         
         Generates a kernel which performs the SU(n) heatbath.
         Example:
-        >>> wilson = GaugeAction(U).add_term(1.0,paths = (1,2,-1,-2)) 
+        >>> wilson = GaugeAction(U).add_term(1.0,(1,2,-1,-2)) 
         >>> wilson.heatbath(beta,n_iter=10)
         """
         U, extra_fields = self.U, self.extra_fields
@@ -1659,19 +1668,16 @@ class TestHeatbath(unittest.TestCase):
         comm = Communicator()
         space = comm.Lattice((N,N,N,N))
         U = space.Field((space.d,nc,nc))
-        U.set_cold()    
+        U.set_cold()
         wilson = GaugeAction(U).add_plaquette_terms()
         # same as wilson.add_term(1.0,(1,2,-1,-2))
         code = wilson.heatbath(beta=4.0)
         # print code.source
         plq = []
-        for k in range(200):
-            print k
+        for k in range(500):
             code.run()
-            print 'done'
-            if k%10==9: 
+            if k>200 and k%10==9: 
                 plq.append(U.average_plaquette())
-                print plq[-1] 
             if DEBUG:
                 print '<plaq> =', sum(plq)/len(pql)
                 U.check_unitarity(output=False)
@@ -1841,7 +1847,7 @@ def test():
         """
 
 if __name__=='__main__':
-    #python -m unittest test_module.TestClass.test_method
+    # python -m unittest test_module.TestClass.test_method
     test()
     unittest.main()
     
