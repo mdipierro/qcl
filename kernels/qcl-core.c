@@ -356,9 +356,11 @@ kernel void heatbath(global cfloat_t *U,
 
 
 kernel void fermi_operator(global cfloat_t *phi,
-			   global cfloat_t *U,	
+			   global cfloat_t *U,
 			   global cfloat_t *psi,
-			   struct bbox_t bbox) {
+			   struct bbox_t bbox
+			   //[inject:extra_fields]
+			   ) {
 
   size_t gid = get_global_id(0);
   size_t idx = gid2idx(gid,&bbox);
@@ -377,7 +379,9 @@ kernel void fermi_operator(global cfloat_t *phi,
 kernel void staggered_operator(global cfloat_t *phi,
 			       global cfloat_t *U,	
 			       global cfloat_t *psi,
-			       struct bbox_t bbox) {
+			       struct bbox_t bbox
+			       //[inject:extra_fields]
+			       ) {
 
   size_t gid = get_global_id(0);
   size_t idx = gid2idx(gid,&bbox);

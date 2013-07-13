@@ -786,9 +786,11 @@ class FermiOperator(object):
     """
     Class to store paths and coefficients relative to any gauge action
     """
-    def __init__(self,lattice):
+    def __init__(self,lattice,gauge,name='aux'):
         self.lattice = lattice
         self.terms = []
+        self.gauge = gauge
+        self.name = name
     def add_term(self, gamma, paths=None):
         """
         gamma is a NspinxNspin Gamma matrix for Wilson fermions
@@ -817,7 +819,9 @@ class FermiOperator(object):
         else:
             raise RuntimeError("invalid Path")
         return self
-    def multiply(self,phi,U,psi,name='aux'):
+    def __call__(self,phi,psi):
+        return self.multiply(phi,psi).run()
+    def multiply(self,phi,psi):
         """
         Computes phi = D[U]*psi
         
@@ -826,7 +830,11 @@ class FermiOperator(object):
         >>> wilson = GaugeAction(lattice).add_term(1.0,paths = (1,2,-1,-2)) 
         >>> wilson.heatbath(beta,n_iter=10)
         """
-        name = name or random_name()
+        if isinstance(self.gauge,(list,tuple)):
+            U, extra_fields = self.gauge[0], self.gauge[1:]
+        else:
+            U, extra_fields = self.gauge, []
+        name = self.name or random_name()
         code = ''
         coefficients,paths = [], []
         k = 0
@@ -855,14 +863,16 @@ class FermiOperator(object):
             
                 k += 1
         action = opencl_fermi_operator(self.terms,U.lattice.d,nspin,nc,name)
-        if nspin>1:
-            source = makesource({'paths':code,'fermi_operator':action})
-        else:
-            source = makesource({'paths':code,'staggered_operator':action})
+        extra_fields_def = ''.join(',global cfloat_t *extra%i' % i
+                                   for i in range(len(extra_fields))
+                                   ) if extra_fields else ''
+        key = 'fermi_operator' if nspin>1 else 'staggered_operator'
+        source = makesource({'paths':code, key:action, 'extra_fields': extra_fields_def})
         def runner(source,self=self,phi=phi,U=U,psi=psi):
 
             phi_buffer = U.lattice.comm.buffer('rw',phi.data)
             U_buffer = U.lattice.comm.buffer('r',U.data)
+            extra_buffers = [U.lattice.comm.buffer('r',e.data) for e in extra_fields]
             psi_buffer = U.lattice.comm.buffer('r',psi.data)
             prg = U.lattice.comm.compile(source)
             if nspin>1:
@@ -874,7 +884,8 @@ class FermiOperator(object):
                                phi_buffer,
                                U_buffer,
                                psi_buffer,
-                               U.lattice.bbox)
+                               U.lattice.bbox,
+                               *extra_buffers)
             if DEBUG:
                 print 'waiting'
             event.wait()
@@ -1615,13 +1626,13 @@ class TestFermions(unittest.TestCase):
         U.set_cold()
         p = space.Site((0,0,4,4))
         psi[p,0,0] = 100.0
-        wilson = FermiOperator(space)
-        wilson.add_term(1.0, None)
+        Dslash = FermiOperator(space,U)
+        Dslash.add_term(1.0, None)
         for mu in (1,2,3,4):
-            wilson.add_term(kappa*(r*I-gamma[mu]), [(mu,)])
-            wilson.add_term(kappa*(r*I+gamma[mu]), [(-mu,)])
+            Dslash.add_term(kappa*(r*I-gamma[mu]), [(mu,)])
+            Dslash.add_term(kappa*(r*I+gamma[mu]), [(-mu,)])
         for k in range(100):                        
-            wilson.multiply(phi,U,psi).run()
+            Dslash(phi,psi)
             # project spin=0, color=0 component, plane passing fox t=0,x=0
             chi = numpy.real(psi.data_component((0,0)).data_slice((0,0)))
             Canvas().imshow(chi).save('fermi.%.2i.png' % k)
@@ -1641,13 +1652,13 @@ class TestFermions(unittest.TestCase):
         U.set_cold()
         p = space.Site((0,0,N/2,N/2))
         psi[p,0] = 100.0
-        wilson = FermiOperator(space)
-        wilson.add_term(1.0, None)
+        Dslash = FermiOperator(space,U)
+        Dslash.add_term(1.0, None)
         for mu in (1,2,3,4):
-            wilson.add_term((kappa, mu), [(mu,)])
-            wilson.add_term((kappa, mu), [(-mu,)])
+            Dslash.add_term((kappa, mu), [(mu,)])
+            Dslash.add_term((kappa, mu), [(-mu,)])
         for k in range(100):                        
-            wilson.multiply(phi,U,psi).run()
+            Dslash(phi,psi)
             # project color=0 component, plane passing fox t=0,x=0
             chi = numpy.real(psi.data_component((0,)).data_slice((0,0)))
             Canvas().imshow(chi).save('staggered.%s.png' % k)
@@ -1700,17 +1711,16 @@ class TestInverters(unittest.TestCase):
         U.set_cold()
         p = space.Site((0,0,4,4))
         psi[p,0,0] = 100.0
-        wilson = FermiOperator(space)
-        wilson.add_term(1.0, None)
+        Dslash = FermiOperator(space,U)
+        Dslash.add_term(1.0, None)
         for mu in (1,2,3,4):
-            wilson.add_term(kappa*(r*I-gamma[mu]), [(mu,)])
-            wilson.add_term(kappa*(r*I+gamma[mu]), [(-mu,)])
-        Dslash = lambda y,x,U=U: wilson.multiply(y,U,x).run()
+            Dslash.add_term(kappa*(r*I-gamma[mu]), [(mu,)])
+            Dslash.add_term(kappa*(r*I+gamma[mu]), [(-mu,)])        
         invert_bicgstab(phi,Dslash,psi)
         chi = numpy.real(phi.data_component((0,0)).data_slice((0,0)))
         Canvas().imshow(chi).save('fermi.prop.png')
         out = space.Field((nspin,nc))
-        wilson.multiply(out,U,phi).run()
+        Dslash(out,phi)
         chi = numpy.real(out.data_component((0,0)).data_slice((0,0)))
         Canvas().imshow(chi).save('fermi.out.png')
         chi = numpy.real(psi.data_component((0,0)).data_slice((0,0)))
@@ -1737,22 +1747,22 @@ def test():
         U.set_cold()
 
         clover = U.clover()
-        print clover[0].data
-        """
         p = space.Site((0,0,4,4))
         psi[p,0,0] = 100.0
-        if False:
-            wilson = FermiOperator(space)
-            wilson.add_term(1.0, None)
+        if True:
+            Dslash = FermiOperator(space,[U]+clover)
+            Dslash.add_term(1.0, None)
             for mu in (1,2,3,4):
-                wilson.add_term(kappa*(r*I-gamma[mu]), [(mu,)])
-                wilson.add_term(kappa*(r*I+gamma[mu]), [(-mu,)])
-            Dslash = lambda y,x,U=U: wilson.multiply(y,U,x).run()
+                Dslash.add_term(kappa*(r*I-gamma[mu]), [(mu,)])
+                Dslash.add_term(kappa*(r*I+gamma[mu]), [(-mu,)])
+            Dslash(phi, psi)
+
+        """
             invert_bicgstab(phi,Dslash,psi)
             chi = numpy.real(phi.data_component((0,0)).data_slice((0,0)))
             Canvas().imshow(chi).save('fermi.prop.png')
             out = space.Field((nspin,nc))
-            wilson.multiply(out,U,phi).run()
+            wilson.multiply(out,phi).run()
             chi = numpy.real(out.data_component((0,0)).data_slice((0,0)))
             Canvas().imshow(chi).save('fermi.out.png')
             chi = numpy.real(psi.data_component((0,0)).data_slice((0,0)))
@@ -1768,7 +1778,8 @@ def test():
         """
 
 if __name__=='__main__':
-    # python -m unittest test_module.TestClass.test_method
+    #python -m unittest test_module.TestClass.test_method
+    test()
     unittest.main()
-    #test()
+    
 
