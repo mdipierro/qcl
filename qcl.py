@@ -1448,7 +1448,7 @@ class TestColdAndHotGauge(unittest.TestCase):
     def test_cold(self):
         comm = Communicator()
         for nc in range(2,4):
-            for N in range(4,8):
+            for N in range(4,6):
                 space = comm.Lattice((N,N,N,N))
                 U = space.Field((4,nc,nc))
                 U.set_cold()
@@ -1457,7 +1457,7 @@ class TestColdAndHotGauge(unittest.TestCase):
     def test_hot(self):
         comm = Communicator()
         for nc in range(2,4):
-            for N in range(4,8):
+            for N in range(4,6):
                 space = comm.Lattice((N,N,N,N))
                 U = space.Field((4,nc,nc))
                 U.set_hot()
@@ -1496,17 +1496,18 @@ class TestPaths(unittest.TestCase):
     def test_paths(self):
         path = (+1,+2,-1,-2)
         paths = bc_symmetrize(path,d=4)
-        self.assertTrue(paths == 
-                        [(2, 1, -2, -1), (3, 1, -3, -1), (4, 1, -4, -1), (-2, 1, 2, -1), (-3, 1, 3, -1),
-                         (-4, 1, 4, -1), (1, 2, -1, -2), (3, 2, -3, -2), (4, 2, -4, -2), (-1, 2, 1, -2),
-                         (-3, 2, 3, -2), (-4, 2, 4, -2), (1, 3, -1, -3), (2, 3, -2, -3), (4, 3, -4, -3),
-                         (-1, 3, 1, -3), (-2, 3, 2, -3), (-4, 3, 4, -3), (1, 4, -1, -4), (2, 4, -2, -4),
-                         (3, 4, -3, -4), (-1, 4, 1, -4), (-2, 4, 2, -4), (-3, 4, 3, -4), (2, -1, -2, 1),
-                         (3, -1, -3, 1), (4, -1, -4, 1), (-2, -1, 2, 1), (-3, -1, 3, 1), (-4, -1, 4, 1),
-                         (1, -2, -1, 2), (3, -2, -3, 2), (4, -2, -4, 2), (-1, -2, 1, 2), (-3, -2, 3, 2),
-                         (-4, -2, 4, 2), (1, -3, -1, 3), (2, -3, -2, 3), (4, -3, -4, 3), (-1, -3, 1, 3),
-                         (-2, -3, 2, 3), (-4, -3, 4, 3), (1, -4, -1, 4), (2, -4, -2, 4), (3, -4, -3, 4),
-                         (-1, -4, 1, 4), (-2, -4, 2, 4), (-3, -4, 3, 4)])
+        self.assertTrue(
+            paths == 
+            [(2, 1, -2, -1), (3, 1, -3, -1), (4, 1, -4, -1), (-2, 1, 2, -1), (-3, 1, 3, -1),
+             (-4, 1, 4, -1), (1, 2, -1, -2), (3, 2, -3, -2), (4, 2, -4, -2), (-1, 2, 1, -2),
+             (-3, 2, 3, -2), (-4, 2, 4, -2), (1, 3, -1, -3), (2, 3, -2, -3), (4, 3, -4, -3),
+             (-1, 3, 1, -3), (-2, 3, 2, -3), (-4, 3, 4, -3), (1, 4, -1, -4), (2, 4, -2, -4),
+             (3, 4, -3, -4), (-1, 4, 1, -4), (-2, 4, 2, -4), (-3, 4, 3, -4), (2, -1, -2, 1),
+             (3, -1, -3, 1), (4, -1, -4, 1), (-2, -1, 2, 1), (-3, -1, 3, 1), (-4, -1, 4, 1),
+             (1, -2, -1, 2), (3, -2, -3, 2), (4, -2, -4, 2), (-1, -2, 1, 2), (-3, -2, 3, 2),
+             (-4, -2, 4, 2), (1, -3, -1, 3), (2, -3, -2, 3), (4, -3, -4, 3), (-1, -3, 1, 3),
+             (-2, -3, 2, 3), (-4, -3, 4, 3), (1, -4, -1, 4), (2, -4, -2, 4), (3, -4, -3, 4),
+             (-1, -4, 1, 4), (-2, -4, 2, 4), (-3, -4, 3, 4)])
         paths = remove_duplicates(paths,bidirectional=True)
         self.assertTrue(paths == [(4, 1, -4, -1), (4, 3, -4, -3), (2, 1, -2, -1),
                                   (3, 2, -3, -2), (3, 1, -3, -1), (4, 2, -4, -2)])
@@ -1585,11 +1586,11 @@ class TestFermions(unittest.TestCase):
         for mu in (1,2,3,4):
             wilson.add_term(kappa*(r*I-gamma[mu]), [(mu,)])
             wilson.add_term(kappa*(r*I+gamma[mu]), [(-mu,)])
-        for k in range(10):                        
+        for k in range(100):                        
             wilson.multiply(phi,U,psi).run()
             # project spin=0, color=0 component, plane passing fox t=0,x=0
             chi = numpy.real(psi.data_component((0,0)).data_slice((0,0)))
-            Canvas().imshow(chi).save('fermi.%s.png' % k)
+            Canvas().imshow(chi).save('fermi.%.2i.png' % k)
             phi,psi = psi,phi
 
     def test_staggered_action(self):
@@ -1680,8 +1681,56 @@ class TestInverters(unittest.TestCase):
         Canvas().imshow(chi).save('fermi.out.png')
         chi = numpy.real(psi.data_component((0,0)).data_slice((0,0)))
         Canvas().imshow(chi).save('fermi.in.png')
+        for spin in range(4):
+            for i in range(3):
+                print 'fermi.%s.%s.real.vtk' % (spin,i)
+                phi.data_component((spin,i)).save('fermi.%s.%s.real.vtk' % (spin,i))
+
+
+def test():
+        N, nspin, nc = 9, 4, 3
+        r = 1.0
+        kappa = 0.1234
+        I = identity(4)
+        gamma = Gamma('fermilab')
+
+        comm = Communicator()
+        space = comm.Lattice((N,N,N,N))
+        U = space.Field((space.d,nc,nc))
+        psi = space.Field((nspin,nc))        
+        phi = space.Field((nspin,nc))
+
+        U.set_cold()
+        p = space.Site((0,0,4,4))
+        psi[p,0,0] = 100.0
+        if False:
+            wilson = FermiOperator(space)
+            wilson.add_term(1.0, None)
+            for mu in (1,2,3,4):
+                wilson.add_term(kappa*(r*I-gamma[mu]), [(mu,)])
+                wilson.add_term(kappa*(r*I+gamma[mu]), [(-mu,)])
+            Dslash = lambda y,x,U=U: wilson.multiply(y,U,x).run()
+            invert_bicgstab(phi,Dslash,psi)
+            chi = numpy.real(phi.data_component((0,0)).data_slice((0,0)))
+            Canvas().imshow(chi).save('fermi.prop.png')
+            out = space.Field((nspin,nc))
+            wilson.multiply(out,U,phi).run()
+            chi = numpy.real(out.data_component((0,0)).data_slice((0,0)))
+            Canvas().imshow(chi).save('fermi.out.png')
+            chi = numpy.real(psi.data_component((0,0)).data_slice((0,0)))
+            Canvas().imshow(chi).save('fermi.in.png')
+            for spin in range(4):
+                for i in range(3):
+                    print 'fermi.%s.%s.real.vtk' % (spin,i)
+                    out.data_component((spin,i)).save('fermi.out.%s.%s.real.vtk' % (spin,i))
+        for spin in range(4):
+            for i in range(3):
+                print 'fermi.%s.%s.real.vtk' % (spin,i)
+                psi.data_component((spin,i)).save('fermi.in.%s.%s.real.vtk' % (spin,i))
+
 
 if __name__=='__main__':
+    # python -m unittest test_module.TestClass.test_method
     unittest.main()
     
 
