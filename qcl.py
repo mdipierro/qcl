@@ -188,7 +188,90 @@ def code_mulh(name,name1,name2,n,m,p):
     return code
 
 # ###########################################################
-# Part I, lattices and fields
+# Part I, Matrices
+# ###########################################################
+
+class Gamma(object):
+    """
+    Container of Gamma matrices
+    """
+    def __init__(self,representation='fermilab'):
+        """
+        Supported representation are be 'fermiqcd','ukqcd','milc' or 'chiral'
+        """
+        if representation == "dummy":
+            gammas = [[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],
+                      [[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],
+                      [[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],
+                      [[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]]]
+        elif representation == "ukqcd":
+            gammas = [[[1,0,0,0],[0,1,0,0],[0,0,-1,0],[0,0,0,-1]],
+                      [[0,0,0,1j],[0,0,1j,0],[0,-1j,0,0],[-1j,0,0,0]],
+                      [[0,0,0,1],[0,0,-1,0],[0,-1,0,0],[1,0,0,0]],
+                      [[0,0,1j,0],[0,0,0,-1j],[-1j,0,0,0],[0,1j,0,0]]]
+        elif representation is "fermilab":
+            gammas = [[[1,0,0,0],[0,1,0,0],[0,0,-1,0],[0,0,0,-1]],
+                      [[0,0,0,1],[0,0,1,0],[0,1,0,0],[1,0,0,0]],
+                      [[0,0,0,-1j],[0,0,1j,0],[0,-1j,0,0],[1j,0,0,0]],
+                      [[0,0,1,0],[0,0,0,-1],[1,0,0,0],[0,-1,0,0]]]
+        elif representation is "milc":
+            gammas = [[[0,0,1,0],[0,0,0,1],[1,0,0,0],[0,1,0,0]],
+                      [[0,0,0,1j],[0,0,1j,0],[0,-1j,0,0],[-1j,0,0,0]],
+                      [[0,0,0,-1],[0,0,1,0],[0,1,0,0],[-1,0,0,0]],
+                      [[0,0,1j,0],[0,0,0,-1j],[-1j,0,0,0],[0,1j,0,0]]]
+        elif representation is "chiral":
+            gammas = [[[0,0,0,-1],[0,0,-1,0],[0,-1,0,0],[-1,0,0,0]],
+                      [[0,0,0,1j],[0,0,1j,0],[0,-1j,0,0],[-1j,0,0,0]],
+                      [[0,0,0,1],[0,0,-1,0],[0,-1,0,0],[1,0,0,0]],
+                      [[0,0,1j,0],[0,0,0,-1j],[-1j,0,0,0],[0,1j,0,0]]]
+        else:
+            raise RuntimeError("unknown gamma matrices representation")
+        self.matrices = [numpy.matrix(gamma) for gamma in gammas]
+        self.matrices.append(self.matrices[0]) # gamma[4] same as gamma[0]
+        # comupte Gamma[5]
+        self.matrices.append(self.matrices[0]*self.matrices[1]*\
+                                 self.matrices[2]*self.matrices[3])
+    def __getitem__(self,mu):
+        return self.matrices[mu]
+
+class Lambda(object):
+    """
+    Container of Sigma and Lambda matrices (generators of SU(N))
+    """
+    def __init__(self,n):
+        """
+        for n==2 produces sigma matrices
+        for n==3 produces 8 lambda matrices but in arbitrary order
+        ... and so on.
+        """
+        def delta(i,j): return 1 if i==j else 0
+        ng = n*n-1
+        self.matrices = []
+        for a in range(ng):
+            pos2 = n*(n-1)
+            pos1 = pos2/2
+            mat = numpy.matrix([[0j]*n]*n)
+            b = 0
+            for i in range(n):
+                for j in range(i+1,n):
+                    mat[i,j] = (delta(b,a)-1j*delta(pos1+b,a))/2
+                    mat[j,i] = (delta(b,a)+1j*delta(pos1+b,a))/2
+                    b+=1
+            for i in range(n-1):
+                mult = delta(pos2+i,a) * (1.0/math.sqrt(2.+2./(1.+i))/(1.+i))
+                for j in range(i+1):
+                    mat[j,j] += mult
+                mat[i+1,i+1] -= (1+i)*mult
+            self.matrices.append(2.0*mat)
+    def __len__(self):
+        return len(self.matrices)
+    def __getitem__(self,i):
+        return self.matrices[i]
+
+
+
+# ###########################################################
+# Part II, lattices and fields
 # ###########################################################
 
 def listify(items):
@@ -710,8 +793,9 @@ class GaugeAction(object):
     """
     Class to store paths and coefficients relative to any gauge action
     """
-    def __init__(self,lattice):
-        self.lattice = lattice
+    def __init__(self,U):
+        self.U = U
+        self.lattice = U.lattice
         self.terms = []
     def add_term(self,coefficient,paths):
         """
@@ -726,13 +810,19 @@ class GaugeAction(object):
             raise RuntimeError("not a valid action term")
         self.terms.append((coefficient,paths))
         return self
-    def heatbath(self,U,beta,n_iter=1,m_iter=1,name='aux'):
+
+    def add_plaquette_terms(self):
+        self.add_term(1.0,[(1,2,-1,-2)])
+        return self
+
+    def heatbath(self,beta,n_iter=1,m_iter=1,name='aux'):
         """
         Generates a kernel which performs the SU(n) heatbath.
         Example:
         >>> wilson = GaugeAction(lattice).add_term(1.0,paths = (1,2,-1,-2)) 
         >>> wilson.heatbath(beta,n_iter=10)
         """
+        U = self.U
         name = name or random_name()
         code = ''
         displacement = 1
@@ -792,7 +882,7 @@ class FermiOperator(object):
         self.extra_fields = extra_fields or []
         self.lattice = U.lattice
         self.name = name or random_name()
-        self.extra = range(len(extra_fields))
+        self.extra = range(len(extra_fields or []))
     def add_term(self, gamma, paths=None):
         """
         gamma is a NspinxNspin Gamma matrix for Wilson fermions
@@ -818,20 +908,64 @@ class FermiOperator(object):
         elif isinstance(paths,list) and len(paths)==1 and \
                 isinstance(paths[0],tuple):
             self.terms.append((gamma,paths))
-#        elif isinstance(paths,int) and paths in self.extra:
-#            self.terms.append((gamma,paths))
+        elif isinstance(paths,int) and paths in self.extra:
+            self.terms.append((gamma,paths))
         else:
             raise RuntimeError("invalid Path")
         return self
+
+    # action specific helper functions
+    def add_staggered_terms(self,kappa=1.0):
+        self.add_term(1.0, None)
+        for mu in range(1,self.lattice.d+1):
+            self.add_term((kappa, mu), [(+mu,)])
+            self.add_term((kappa, mu), [(-mu,)])
+        return self
+
+    def add_staggered_nhop_terms(self,kappa=1.0, nhop=3):
+        for mu in range(1,self.lattice.d+1):
+            self.add_term((kappa, mu), [[+mu]*nhop])
+            self.add_term((kappa, mu), [[-mu]*nhop])
+        return self
+
+    def add_wilson4d_terms(self,
+                           kappa=1.0,kappa_t=1.0,kappa_s=1.0,
+                           r=1.0,r_t=1.0,r_s=1.0,
+                           gamma=Gamma('fermilab')):
+        I = identity(4)
+        self.add_term(1.0, None)
+        for mu in (1,2,3,4):
+            k = kappa * (kappa_t if mu==4 else kappa_s)
+            b = r * (r_t if mu==4 else r_s)
+            self.add_term(k*(b*I-gamma[mu]), [(+mu,)])
+            self.add_term(k*(b*I+gamma[mu]), [(-mu,)])
+        return self
+
+    def add_clover4d_terms(self,c_SW=1.0,c_E=1.0,c_B=1.0,gamma=Gamma('fermilab')):
+        clover = self.U.clover()
+        n = len(self.extra_fields)
+        self.extra_fields += self.U.clover()        
+        self.extra = range(len(self.extra_fields))
+        self.add_term(-2.0*c_SW*c_E*gamma[4]*gamma[1],n+0) # Ex                       
+        self.add_term(-2.0*c_SW*c_E*gamma[4]*gamma[2],n+1) # Ey                       
+        self.add_term(-2.0*c_SW*c_E*gamma[4]*gamma[3],n+2) # Ez                       
+        self.add_term(-2.0*c_SW*c_B*gamma[1]*gamma[2],n+3) # Bx                       
+        self.add_term(-2.0*c_SW*c_B*gamma[1]*gamma[3],n+4) # By                       
+        self.add_term(-2.0*c_SW*c_B*gamma[2]*gamma[3],n+5) # Bz
+        return self
+
+    # end action specific helper functions
+        
     def __call__(self,phi,psi):
         return self.multiply(phi,psi).run()
+
     def multiply(self,phi,psi):
         """
         Computes phi = D[U]*psi
         
         Generates a kernel which performs the SU(n) heatbath.
         Example:
-        >>> wilson = GaugeAction(lattice).add_term(1.0,paths = (1,2,-1,-2)) 
+        >>> wilson = GaugeAction(U).add_term(1.0,paths = (1,2,-1,-2)) 
         >>> wilson.heatbath(beta,n_iter=10)
         """
         U, extra_fields = self.U, self.extra_fields
@@ -894,86 +1028,9 @@ class FermiOperator(object):
             return self
         return Code(source,runner)
 
-class Gamma(object):
-    """
-    Container of Gamma matrices
-    """
-    def __init__(self,representation='fermilab'):
-        """
-        Supported representation are be 'fermiqcd','ukqcd','milc' or 'chiral'
-        """
-        if representation == "dummy":
-            gammas = [[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],
-                      [[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],
-                      [[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],
-                      [[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]]]
-        elif representation == "ukqcd":
-            gammas = [[[1,0,0,0],[0,1,0,0],[0,0,-1,0],[0,0,0,-1]],
-                      [[0,0,0,1j],[0,0,1j,0],[0,-1j,0,0],[-1j,0,0,0]],
-                      [[0,0,0,1],[0,0,-1,0],[0,-1,0,0],[1,0,0,0]],
-                      [[0,0,1j,0],[0,0,0,-1j],[-1j,0,0,0],[0,1j,0,0]]]
-        elif representation is "fermilab":
-            gammas = [[[1,0,0,0],[0,1,0,0],[0,0,-1,0],[0,0,0,-1]],
-                      [[0,0,0,1],[0,0,1,0],[0,1,0,0],[1,0,0,0]],
-                      [[0,0,0,-1j],[0,0,1j,0],[0,-1j,0,0],[1j,0,0,0]],
-                      [[0,0,1,0],[0,0,0,-1],[1,0,0,0],[0,-1,0,0]]]
-        elif representation is "milc":
-            gammas = [[[0,0,1,0],[0,0,0,1],[1,0,0,0],[0,1,0,0]],
-                      [[0,0,0,1j],[0,0,1j,0],[0,-1j,0,0],[-1j,0,0,0]],
-                      [[0,0,0,-1],[0,0,1,0],[0,1,0,0],[-1,0,0,0]],
-                      [[0,0,1j,0],[0,0,0,-1j],[-1j,0,0,0],[0,1j,0,0]]]
-        elif representation is "chiral":
-            gammas = [[[0,0,0,-1],[0,0,-1,0],[0,-1,0,0],[-1,0,0,0]],
-                      [[0,0,0,1j],[0,0,1j,0],[0,-1j,0,0],[-1j,0,0,0]],
-                      [[0,0,0,1],[0,0,-1,0],[0,-1,0,0],[1,0,0,0]],
-                      [[0,0,1j,0],[0,0,0,-1j],[-1j,0,0,0],[0,1j,0,0]]]
-        else:
-            raise RuntimeError("unknown gamma matrices representation")
-        self.matrices = [numpy.matrix(gamma) for gamma in gammas]
-        self.matrices.append(self.matrices[0]) # gamma[4] same as gamma[0]
-        # comupte Gamma[5]
-        self.matrices.append(self.matrices[0]*self.matrices[1]*\
-                                 self.matrices[2]*self.matrices[3])
-    def __getitem__(self,mu):
-        return self.matrices[mu]
-
-class Lambda(object):
-    """
-    Container of Sigma and Lambda matrices (generators of SU(N))
-    """
-    def __init__(self,n):
-        """
-        for n==2 produces sigma matrices
-        for n==3 produces 8 lambda matrices but in arbitrary order
-        ... and so on.
-        """
-        def delta(i,j): return 1 if i==j else 0
-        ng = n*n-1
-        self.matrices = []
-        for a in range(ng):
-            pos2 = n*(n-1)
-            pos1 = pos2/2
-            mat = numpy.matrix([[0j]*n]*n)
-            b = 0
-            for i in range(n):
-                for j in range(i+1,n):
-                    mat[i,j] = (delta(b,a)-1j*delta(pos1+b,a))/2
-                    mat[j,i] = (delta(b,a)+1j*delta(pos1+b,a))/2
-                    b+=1
-            for i in range(n-1):
-                mult = delta(pos2+i,a) * (1.0/math.sqrt(2.+2./(1.+i))/(1.+i))
-                for j in range(i+1):
-                    mat[j,j] += mult
-                mat[i+1,i+1] -= (1+i)*mult
-            self.matrices.append(2.0*mat)
-    def __len__(self):
-        return len(self.matrices)
-    def __getitem__(self,i):
-        return self.matrices[i]
-
 
 # ###########################################################
-# Part II, paths and symmetries
+# Part III, paths and symmetries
 # ###########################################################
 
 def bc_symmetrize(path=[+1,+2,+4,-1,-2,-4],d=4,positive_only=False):
@@ -1127,7 +1184,7 @@ def minimum_spanning_graph(paths,bidirectional=True):
     return solution
 
 # ###########################################################
-# Part III, OpenCL code generation algorithms
+# Part IV, OpenCL code generation algorithms
 # ###########################################################
 
 class Code(object):
@@ -1335,13 +1392,20 @@ def opencl_fermi_operator(terms,d,nspin,nc,name='aux'):
                     code.append('phi[idx2].x = %s*psi[idx2].x;' % gamma)
                     code.append('phi[idx2].y = %s*psi[idx2].y;' % gamma)
             continue
-        code.append("%s%s(path,U,idx,&bbox);" % (name,h))        
-        path = opaths[0]
-        site = [0]*d
-        for step in opaths[0]: site[abs(step) % d] += 1 if step>0 else -1
-        for i in range(d): code.append('delta.s[%s] = %s;' % (i, site[i]));
-        code.append('p = phi+idx*%s;' % (nspin*nc));
-        code.append('q = psi+idx2idx_shift(idx,delta,&bbox)*%s;' % (nspin*nc));
+        code.append('p = phi+idx*%s;' % (nspin*nc))
+        is_wilson = isinstance(opaths,(list,tuple)) # else is clover-like
+        if is_wilson:
+            code.append("%s%s(path,U,idx,&bbox);" % (name,h))        
+            h += 1
+            path = opaths[0]
+            site = [0]*d
+            for step in opaths[0]: site[abs(step) % d] += 1 if step>0 else -1
+            for i in range(d): code.append('delta.s[%s] = %s;' % (i, site[i]))
+            code.append('q = psi+idx2idx_shift(idx,delta,&bbox)*%s;' % (nspin*nc))
+            pname = 'path'
+        else:            
+            pname = 'extra%i' % opaths
+            code.append('p = psi+idx*%s;' % (nspin*nc))
         spinor = [0]*(nspin*nc)
         if nspin>1:
             for r in range(nspin):
@@ -1388,10 +1452,10 @@ def opencl_fermi_operator(terms,d,nspin,nc,name='aux'):
                 for j in range(nc):
                     k = r*nc+j
                     if spinor[k].real:
-                        line += '\n\t\t + path[%s].x*spinor[%s].x' % (i*nc+j,k)
+                        line += '\n\t\t + %s[%s].x*spinor[%s].x' % (pname,i*nc+j,k)
                         counter += 1
                     if spinor[k].imag:
-                        line += '\n\t\t - path[%s].y*spinor[%s].y' % (i*nc+j,k)
+                        line += '\n\t\t - %s[%s].y*spinor[%s].y' % (pname,i*nc+j,k)
                         counter += 1
                 line += ';'
                 if counter: code.append(line)
@@ -1400,14 +1464,14 @@ def opencl_fermi_operator(terms,d,nspin,nc,name='aux'):
                 for j in range(nc):
                     k = r*nc+j
                     if spinor[k].imag:
-                        line += '\n\t + path[%s].x*spinor[%s].y' % (i*nc+j,k)
+                        line += '\n\t + %s[%s].x*spinor[%s].y' % (pname,i*nc+j,k)
                         counter += 1
                     if spinor[k].real:
-                        line += '\n\t + path[%s].y*spinor[%s].x' % (i*nc+j,k)
+                        line += '\n\t + %s[%s].y*spinor[%s].x' % (pname,i*nc+j,k)
                         counter += 1
                 line += ';'
                 if counter: code.append(line)
-        h += 1
+                    
     return '\n'.join(code)
 
 # ###########################################################
@@ -1487,7 +1551,7 @@ def invert_bicgstab(y,f,x,ap=1e-4,rp=1e-4,ns=200):
     raise ArithmeticError, 'no convergence'
 
 # ###########################################################
-# Tests
+# Part V, Tests
 # ###########################################################
 
 class TestColdAndHotGauge(unittest.TestCase):
@@ -1596,19 +1660,22 @@ class TestHeatbath(unittest.TestCase):
         space = comm.Lattice((N,N,N,N))
         U = space.Field((space.d,nc,nc))
         U.set_cold()    
-        wilson = GaugeAction(space)
-        wilson.add_term(1.0,(1,2,-1,-2))
-        code = wilson.heatbath(U,beta=4.0)
+        wilson = GaugeAction(U).add_plaquette_terms()
+        # same as wilson.add_term(1.0,(1,2,-1,-2))
+        code = wilson.heatbath(beta=4.0)
         # print code.source
-        avg_plq = 0.0
+        plq = []
         for k in range(200):
-            code.run()        
-            plq = U.average_plaquette()
-            avg_plq = (avg_plq * k + plq)/(k+1)
+            print k
+            code.run()
+            print 'done'
+            if k%10==9: 
+                plq.append(U.average_plaquette())
+                print plq[-1] 
             if DEBUG:
-                print '<plaq> =', plq, '<avg> =', avg_plq
+                print '<plaq> =', sum(plq)/len(pql)
                 U.check_unitarity(output=False)
-        self.assertTrue( 0.29 < abs(avg_plq) < 0.3 )
+        self.assertTrue( 0.29 < sum(plq)/len(plq) < 0.3 )
 
 class TestFermions(unittest.TestCase):
     def test_wilson_action(self):
@@ -1632,7 +1699,7 @@ class TestFermions(unittest.TestCase):
         for mu in (1,2,3,4):
             Dslash.add_term(kappa*(r*I-gamma[mu]), [(mu,)])
             Dslash.add_term(kappa*(r*I+gamma[mu]), [(-mu,)])
-        for k in range(100):                        
+        for k in range(10):
             Dslash(phi,psi)
             # project spin=0, color=0 component, plane passing fox t=0,x=0
             chi = numpy.real(psi.data_component((0,0)).data_slice((0,0)))
@@ -1653,16 +1720,12 @@ class TestFermions(unittest.TestCase):
         U.set_cold()
         p = space.Site((0,0,N/2,N/2))
         psi[p,0] = 100.0
-        Dslash = FermiOperator(U)
-        Dslash.add_term(1.0, None)
-        for mu in (1,2,3,4):
-            Dslash.add_term((kappa, mu), [(mu,)])
-            Dslash.add_term((kappa, mu), [(-mu,)])
-        for k in range(100):                        
+        Dslash = FermiOperator(U).add_staggered_terms(kappa)
+        for k in range(10):
             Dslash(phi,psi)
             # project color=0 component, plane passing fox t=0,x=0
             chi = numpy.real(psi.data_component((0,)).data_slice((0,0)))
-            Canvas().imshow(chi).save('staggered.%s.png' % k)
+            Canvas().imshow(chi).save('staggered.%.2i.png' % k)
             phi,psi = psi,phi
 
 
@@ -1736,6 +1799,8 @@ def test():
         N, nspin, nc = 9, 4, 3
         r = 1.0
         kappa = 0.1234
+        c_SW = 0.5
+
         I = identity(4)
         gamma = Gamma('fermilab')
 
@@ -1747,15 +1812,12 @@ def test():
 
         U.set_cold()
 
-        clover = U.clover()
         p = space.Site((0,0,4,4))
         psi[p,0,0] = 100.0
         if True:
-            Dslash = FermiOperator(U,extra_fields=clover)
-            Dslash.add_term(1.0, None)
-            for mu in (1,2,3,4):
-                Dslash.add_term(kappa*(r*I-gamma[mu]), [(mu,)])
-                Dslash.add_term(kappa*(r*I+gamma[mu]), [(-mu,)])
+            Dslash = FermiOperator(U)
+            Dslash.add_wilson4d_terms(kappa)
+            Dslash.add_clover4d_terms(c_SW)
             Dslash(phi, psi)
 
         """
@@ -1782,5 +1844,6 @@ if __name__=='__main__':
     #python -m unittest test_module.TestClass.test_method
     test()
     unittest.main()
+    
     
 
