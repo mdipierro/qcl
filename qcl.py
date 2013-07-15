@@ -1630,7 +1630,7 @@ def invert_minimum_residue(y,f,x,ap=1e-4,rp=1e-4,ns=200):
         residue = math.sqrt(vdot(r,r).real/r.size)
         norm = math.sqrt(vdot(y,y).real)
         if residue<max(ap,norm*rp): return y
-    raise ArithmeticError, 'no convergence'
+    raise ArithmeticError('no convergence')
 
 def invert_bicgstab(y,f,x,ap=1e-4,rp=1e-4,ns=200):
     p = clone(x)
@@ -1660,9 +1660,10 @@ def invert_bicgstab(y,f,x,ap=1e-4,rp=1e-4,ns=200):
         y += alpha * p
         residue = math.sqrt(vdot(r,r).real/r.size)
         norm = math.sqrt(vdot(y,y).real)     
-        if residue<max(ap,norm*rp): return y
+        if residue<max(ap,norm*rp):
+            return y
         r -= omega * t
-    raise ArithmeticError, 'no convergence'
+    raise ArithmeticError('no convergence')
 
 # ###########################################################
 # Part V, Tests
