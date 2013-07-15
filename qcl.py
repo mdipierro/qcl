@@ -865,17 +865,19 @@ class GaugeAction(object):
         action = '\n'.join('if(mu==%i) %s%i(staples,U,idx,&bbox);' % 
                            (i,name,i) for i in range(self.lattice.d))
         source = makesource({'paths':code,'heatbath_action':action})
-        def runner(source,self=self,U=U,beta=beta,n_iter=n_iter,m_iter=m_iter,
+        def runner(source,self=self,beta=beta,n_iter=n_iter,m_iter=m_iter,
                    displacement=displacement):
+            U = self.U
+            lattice = U.lattice
             shape = U.siteshape
             if not (len(shape)==3 and shape[1]==shape[2]): raise RuntimeError
-            data_buffer = U.lattice.comm.buffer('rw',U.data)
-            prg = U.lattice.comm.compile(source)
+            data_buffer = lattice.comm.buffer('rw',U.data)
+            prg = lattice.comm.compile(source)
             for size, x in self.lattice.bbox_range(displacement):
                 if DEBUG:
                     print 'displacement: %s, size:%s, slice:%s' % (
                         displacement, size, x)
-                event = prg.heatbath(U.lattice.comm.queue,
+                event = prg.heatbath(lattice.comm.queue,
                              (size,),None,
                              data_buffer,
                              numpy.int32(shape[0]),
@@ -883,12 +885,12 @@ class GaugeAction(object):
                              numpy.float32(beta),
                              numpy.int32(n_iter),
                              numpy.int32(m_iter),
-                             U.lattice.bbox,
-                             U.lattice.prngstate_buffer)
+                             lattice.bbox,
+                             lattice.prngstate_buffer)
                 if DEBUG:
                     print 'waiting'
                 event.wait()
-            cl.enqueue_copy(U.lattice.comm.queue, U.data, data_buffer).wait()
+            cl.enqueue_copy(lattice.comm.queue, U.data, data_buffer).wait()
             return self
         return Code(source,runner)
 
@@ -925,7 +927,7 @@ class GaugeSmearOperator(GaugeAction):
                                  trace=False)
         action = '\n'.join('if(mu==%i) %s%i(staples,U,idx,&bbox);' % 
                            (i,name,i) for i in range(lattice.d))
-        source = makesource({'paths':code,'smear_paths':action})
+        source = makesource({'paths':code,'smear_links':action})
         def runner(source,self=self,V=V):
             U = self.U
             lattice  = U.lattice

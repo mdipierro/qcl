@@ -368,7 +368,7 @@ kernel void smear_links(global cfloat_t *V,
   for(int mu=0; mu<d; mu++) {
     ixmu = (idx*d+mu)*n*n;
     
-    //[inject:smear_paths]
+    //[inject:smear_links]
     // something like                                                         
     // if(mu==0) aux0(V+ixmu,U,idx,&bbox);                                   
     // if(mu==1) aux1(V+ixmu,U,idx,&bbox);                                   
