@@ -1,6 +1,6 @@
 """
 Conventions:
-dims = (nt, nx, ny, nz,...)
+shape = (nt, nx, ny, nz,...)
 mu = +1(X),+2(Y),+3(Z),+4(T),...
 mu = -1(X),-2(Y),-3(Z),-4(T),...
 path = (+1,-2,-3,+2,+3,-1)
@@ -360,26 +360,26 @@ class Communicator(object):
     def recv(self,source,data):
         """ MPI recv """
         if not IGNORE_NOT_IMPLEMENTED: raise NotImplementedError
-    def Lattice(self,dims,bboxs=None):
+    def Lattice(self,shape,bboxs=None):
         """ 
         Creates a new lattice that lives on the device 
-        dims is a tuple with the dimensions of the site tensor.
+        shape is a tuple with the dimensions of the site tensor.
         """
-        return Lattice(self,dims,bboxs)
+        return Lattice(self,shape,bboxs)
 
 
 class Lattice(object):
     """ a lattice encodes info about volume and parallelization """
-    def __init__(self,comm,dims,bboxs=None):
+    def __init__(self,comm,shape,bboxs=None):
         """
         Constructor of a Lattice
         It computes the size and allocaltes local ranlux prng on device
         """
         self.comm = comm
-        self.dims = listify(dims)
-        self.d = len(dims)
-        self.size = size = product(self.dims)
-        self.bboxs = bboxs or [[(0,)*self.d,self.dims]]
+        self.shape = listify(shape)
+        self.d = len(shape)
+        self.size = size = product(self.shape)
+        self.bboxs = bboxs or [[(0,)*self.d,self.shape]]
         self.prngstate_buffer = None
         self.prng_on(time.time()) # for debugging!
         self.parallel = len(self.bboxs)>1 # change for multi-GPU
@@ -389,7 +389,7 @@ class Lattice(object):
     ### bbox stuff
     def _bbox_init(self):
         """ Initalizes the size of the lattice partition hosted on device """
-        for i,x in enumerate(self.dims):
+        for i,x in enumerate(self.shape):
             self.bbox[i]=0 # global coordinates if the start of bbox
             self.bbox[i+MAXD]=0 # top padding size
             self.bbox[i+2*MAXD]=x # internal bbox size
@@ -426,7 +426,8 @@ class Lattice(object):
     def prng_on(self,seed):
         """ 
         Initializes the parallel random number generator 
-        It currently uses ranlux, the Lusher's generator which comes with pyOpenCL
+        It currently uses ranlux, the Lusher's generator 
+        which comes with pyOpenCL
         """
         self.seed = seed
         STATE_SIZE = 112
@@ -437,20 +438,20 @@ class Lattice(object):
                         numpy.uint32(seed),self.prngstate_buffer)
     def prng_get(self):
         """ Retrieves the state of the prng from device """
-        cl.enqueue_copy(self.comm.queue, self.prngstate, self.prngstate_buffer).wait()
+        cl.enqueue_copy(self.comm.queue, self.prngstate, 
+                        self.prngstate_buffer).wait()
     def prng_off(self):
         """ Disabled the prng on device"""
         self.prngstate = self.prngstate_buffer = None
     def coords2global(self,coords):
         """ Converts (t,x,y,z) coordinates into global index """
-        if len(coords)!=len(self.dims):
+        if len(coords)!=len(self.shape):
             raise RuntimeError("invalid conversion")
-        return sum(p*product(self.dims[i+1:]) \
-                       for i,p in enumerate(coords))
+        return sum(p*product(self.shape[i+1:]) for i,p in enumerate(coords))
     def global2coords(self,i):
         """ Converts global index into (t,x,y,z) """
         coords = []
-        for k in reversed(self.dims):
+        for k in reversed(self.shape):
             i,reminder = divmod(i,k)
             coords.insert(0,reminder)
         return tuple(coords)
@@ -491,7 +492,7 @@ class Site(object):
         if mu<0:
             return self.__sub__(-mu)
         mu = mu % self.lattice.d
-        L = self.lattice.dims[mu]
+        L = self.lattice.shape[mu]
         coords = tuple((c if nu!=mu else ((c+1)%L))
                        for nu,c in enumerate(self.coords))
         return self.lattice.Site(coords)
@@ -504,7 +505,7 @@ class Site(object):
         if mu<0:
             return self.__add__(-mu)
         mu = mu % self.lattice.d
-        L = self.lattice.dims[mu]
+        L = self.lattice.shape[mu]
         coords = tuple((c if nu!=mu else ((c+L-1)%L))
                        for nu,c in enumerate(self.coords))
         return self.lattice.Site(coords)
@@ -571,7 +572,7 @@ class Field(object):
         Returns a numpy slice of the current self.data at coordinates c
         """
         if self.sitesize!=1: raise NotImplementedError
-        d = self.lattice.dims[len(slice_coords):]
+        d = self.lattice.shape[len(slice_coords):]
         coords = [e for e in slice_coords]+[0 for i in d]
         t = self.lattice.coords2global(coords)
         s = product(d)
@@ -646,6 +647,11 @@ class Field(object):
         else:
             raise NotImplementedError
         return self
+    def fft(self,time = False):
+        """ returns a ndarray with the fft over the spatial self.data """
+        return numpy.fft.fftn(
+            self.data.reshape(self.lattice.shape+self.siteshape),
+            axes=range(0 if time else 1,self.lattice.d))
     def save(self,filename):
         """ Saves the field supports *.npy and *.vtk (for 4 only)"""
         format = filename.split('.')[-1].lower()
@@ -653,17 +659,17 @@ class Field(object):
             numpy.save(filename,self.data)            
         elif format == 'vtk' or self.lattice.d!=4 or self.siteshape!=(1,):
             ostream = open(filename,'wb')
-            s = product(self.lattice.dims[-3:])
+            s = product(self.lattice.shape[-3:])
             h1 = "# vtk DataFile Version 2.0\n"+\
                 filename.split('/')[-1]+'\n'+\
                 'BINARY\n'+\
                 'DATASET STRUCTURED_POINTS\n'+\
-                'DIMENSIONS %s %s %s\n'%tuple(self.lattice.dims[-3:])+\
+                'DIMENSIONS %s %s %s\n'%tuple(self.lattice.shape[-3:])+\
                 'ORIGIN     0 0 0\n'+\
                 'SPACING    1 1 1\n'+\
                 'POINT_DATA %s' % s
             ostream.write(h1)            
-            for t in xrange(self.lattice.dims[0]):
+            for t in xrange(self.lattice.shape[0]):
                 h2 = '\nSCALARS t%s float\nLOOKUP_TABLE default\n' % t
                 ostream.write(h2)
                 numpy.real(self.data[t*s:t*s+s]).tofile(ostream)
@@ -1323,9 +1329,9 @@ def opencl_paths(function_name, # name of the generated function
     vars = []
     code = []
     matrices = {}
-    d = len(lattice.dims)
+    d = len(lattice.shape)
     n = nc
-    site = lattice.Site(tuple(0 for i in lattice.dims))
+    site = lattice.Site(tuple(0 for i in lattice.shape))
     vars.append('unsigned long ixmu;')
     if initialize:
         if trace:
@@ -2017,8 +2023,5 @@ def test():
 
 if __name__=='__main__':
     # python -m unittest test_module.TestClass.test_method
-    test()
+    # test()
     unittest.main()
-    
-    
-
