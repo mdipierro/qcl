@@ -8,7 +8,7 @@ path = (+1,-2,-3,+2,+3,-1)
 attention sync,load,save and other functions are not parallel!
 """
 
-DEBUG = False
+DEBUG = True
 
 import math
 import sys
@@ -23,6 +23,9 @@ import re
 import unittest
 import numpy # types: int8, int16, int32, int64,
              #        float32, float64, complex64, complex128
+
+if DEBUG:
+    import warnings
 
 try:
     import pyopencl as cl
@@ -981,8 +984,8 @@ class FermiOperator(object):
         if paths is None: # diagonal term in operator
             if self.terms and self.terms[0][1] is None:
                 raise RuntimeError("cannot have two terms without paths")
-            if not isinstance(gamma,(int,float)):
-                raise RuntimeError("gamma must be a simple number of no paths")
+            #if not isinstance(gamma,(int,float)):
+            #    raise RuntimeError("gamma must be a simple number of no paths")
             self.terms.insert(0,(gamma,paths))
         elif is_multiple_paths(paths): # sum of shift terms
             self.terms.append((gamma,paths))
@@ -1464,11 +1467,44 @@ def opencl_fermi_operator(terms,d,nspin,nc,name='aux'):
     h = 0 
     for gamma, opaths in terms:
         if opaths is None:
-            for r in range(nspin):
-                for i in range(nc):
-                    code.append('idx2=idx*%s+%s;' % (nspin*nc, r*nc+i))
-                    code.append('phi[idx2].x = %s*psi[idx2].x;' % gamma)
-                    code.append('phi[idx2].y = %s*psi[idx2].y;' % gamma)
+            if isinstance(gamma,(int,float)):
+                for r in range(nspin):
+                    for i in range(nc):
+                        code.append('idx2=idx*%s+%s;' % (nspin*nc, r*nc+i))
+                        code.append('phi[idx2].x = %s*psi[idx2].x;' % gamma)
+                        code.append('phi[idx2].y = %s*psi[idx2].y;' % gamma)
+            elif isinstance(gamma,complex) or nspin<2:
+                raise NotImplementedError
+            else:
+                spinor = [0]*(nspin*nc)
+                for r in range(nspin):
+                    for i in range(nc):
+                        k = (r*nc+i)
+                        spinor[k] = 0+0j
+                        code.append('idx2=idx*%s+%s;' % (nspin*nc, r*nc+i))
+                        code.append('p = psi+idx*%s;' % (nspin*nc))
+                        line = 'phi[idx2].x ='
+                        for c in range(nspin):
+                            coeff = gamma[r,c]
+                            if coeff.real:
+                                line+="+ (%s)*p[%s].x" % (coeff.real,c*nc+i)
+                                spinor[k] += 1
+                            if coeff.imag:
+                                line+="- (%s)*p[%s].y" % (coeff.imag,c*nc+i)
+                                spinor[k] += 1
+                        line+=';'
+                        if spinor[k].real: code.append(line)
+                        line = 'phi[idx2].y ='
+                        for c in range(nspin):
+                            coeff = gamma[r,c]
+                            if coeff.real:
+                                line+="+ (%s)*p[%s].y" % (coeff.real,c*nc+i)
+                                spinor[k] += 1j                        
+                            if coeff.imag:
+                                line+="+ (%s)*p[%s].x" % (coeff.imag,c*nc+i)
+                                spinor[k] += 1j
+                        line+=';'
+                        if spinor[k].imag: code.append(line)
             continue
         code.append('p = phi+idx*%s;' % (nspin*nc))
         is_wilson = isinstance(opaths,(list,tuple)) # else is clover-like
@@ -1911,6 +1947,7 @@ class TestSmearing(unittest.TestCase):
         self.assertTrue(abs(U.average_plaquette()-1.0)<1e-4)
         self.assertTrue(abs(V.average_plaquette()-(1.0+0.1*6)**4)<1e-3)
     def test_fermi_smearing(self):
+        gamma = Gamma('fermilab')
         I = identity(4)
         N, nc,nspin = 9, 3, 4
         comm = Communicator()
@@ -1921,9 +1958,9 @@ class TestSmearing(unittest.TestCase):
         phi = space.Field((nspin,nc))
         p = space.Site((0,0,4,4))
         psi[p,0,0] = 100.0
-        S = FermiOperator(U).add_diagonal_term(1.0)        
+        S = FermiOperator(U).add_diagonal_term(1.0)
         for mu in (1,2,3,4): S.add_term(0.1*I,[(-mu,)]).add_term(0.1*I,[(mu,)])
-        for k in range(100):
+        for k in range(10):
             S(phi,psi)
             phi,psi = psi,phi
             chi = numpy.real(phi.data_component((0,0)).data_slice((0,0)))
