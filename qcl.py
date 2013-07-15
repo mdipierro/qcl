@@ -8,8 +8,6 @@ path = (+1,-2,-3,+2,+3,-1)
 attention sync,load,save and other functions are not parallel!
 """
 
-DEBUG = True
-
 import math
 import sys
 import os
@@ -23,6 +21,8 @@ import re
 import unittest
 import numpy # types: int8, int16, int32, int64,
              #        float32, float64, complex64, complex128
+
+DEBUG = '-debug' in sys.argv[1:]
 
 if DEBUG:
     import warnings
