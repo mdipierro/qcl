@@ -5,6 +5,9 @@ mu = +1(X),+2(Y),+3(Z),+4(T),...
 mu = -1(X),-2(Y),-3(Z),-4(T),...
 path = (+1,-2,-3,+2,+3,-1)
 
+Time is always 0 but in paths it is D because we need +D, -D.
+field.data.shape = (volume,*siteshape)
+
 attention sync,load,save and other functions are not parallel!
 """
 
