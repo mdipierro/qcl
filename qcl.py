@@ -106,6 +106,16 @@ class Canvas(object):
 # Other Auxiliary function
 ##
 
+def is_dir(a,b,d):
+    return a>=0 and b>=0 and a%d == b%d
+
+def is_closed_path(path):
+    p = [0]*100
+    for x in path:
+        if x==0: raise RuntimeError("0 in path")
+        p[abs(x)] += +1 if x>0 else -1
+    return not any(p)
+
 def is_single_path(path):
     return isinstance(path,(list,tuple)) and all(isinstance(x,int) for x in path)
 
@@ -662,7 +672,6 @@ class Field(object):
         """ Syncronizes all buffers in multi-device environment (not implrmented) """
         if not IGNORE_NOT_IMPLEMENTED: raise NotImplementedError
         return self
-
     def set_link_product(self,U,paths,name='aux'):
         """
         Generates a kernel to set the field to the sum of specified product of links
@@ -734,6 +743,9 @@ class Field(object):
                     data_buffer,numpy.int32(shape[0]),numpy.int32(shape[1]),
                     self.lattice.bbox,self.lattice.prngstate_buffer).wait()
         cl.enqueue_copy(self.lattice.comm.queue, self.data, data_buffer).wait()
+
+    def set_smeared(self,smear_operator):
+        smear_operator.smear_to(self).run()
 
     def check_unitarity(self,output=DEBUG):
         """
@@ -877,6 +889,63 @@ class GaugeAction(object):
             return self
         return Code(source,runner)
 
+class GaugeSmearOperator(GaugeAction):
+    def heathbath(self):
+        raise NotImplementedError
+
+    def smear_to(self,V,name='aux'):
+        """
+        Generates a kernel which performs the SU(n) heatbath.
+        Example:
+        >>> op = GaugeSmearOperator(U).add_term([1],1).add_term([2,1,-2],0.3)
+        >>> op.smear_to(V).run() # same of V.set_smeared(op)
+        """
+        U = self.U
+        lattice = U.lattice
+        name = name or random_name()
+        code = ''
+        displacement = 1
+        for mu in range(self.lattice.d):
+            coefficients,paths = [], []
+            for coefficient, cpaths in self.terms:
+                for path in cpaths: 
+                    if is_closed_path(listify(path)+[-mu if mu else -4]):
+                        coefficients.append(coefficient)
+                        paths.append(path)
+            # print mu, paths, coefficients
+            code += opencl_paths(function_name = name+str(mu),
+                                 lattice = lattice,
+                                 coefficients=coefficients,
+                                 paths=paths,
+                                 nc = U.data.shape[-1],
+                                 initialize=True,
+                                 trace=False)
+        action = '\n'.join('if(mu==%i) %s%i(staples,U,idx,&bbox);' % 
+                           (i,name,i) for i in range(lattice.d))
+        source = makesource({'paths':code,'smear_paths':action})
+        def runner(source,self=self,V=V):
+            U = self.U
+            lattice  = U.lattice
+            shape = U.siteshape
+            if not (len(shape)==3 and shape[1]==shape[2]): raise RuntimeError
+            data_buffer_V = lattice.comm.buffer('w',V.data)
+            data_buffer_U = lattice.comm.buffer('r',U.data)
+            prg = U.lattice.comm.compile(source)
+            event = prg.smear_links(
+                lattice.comm.queue,
+                (lattice.size,),None,
+                data_buffer_V,
+                data_buffer_U,
+                numpy.int32(shape[0]),
+                numpy.int32(shape[1]),
+                lattice.bbox)
+            if DEBUG:
+                print 'waiting'
+            event.wait()
+            cl.enqueue_copy(lattice.comm.queue, V.data, data_buffer_V).wait()
+            return self
+        return Code(source,runner)
+
 
 class FermiOperator(object):
     """
@@ -999,7 +1068,7 @@ class FermiOperator(object):
             if isinstance(opaths,list):
                 code += opencl_paths(function_name = name+str(k),
                                      lattice = self.lattice,
-                                     coefficients=[1.0],
+                                     coefficients=[1.0]*len(opaths),
                                      paths=opaths,
                                      nc = nc,
                                      initialize = True,
@@ -1712,6 +1781,34 @@ class TestFermions(unittest.TestCase):
             Canvas().imshow(chi).save('fermi.%.2i.png' % k)
             phi,psi = psi,phi
 
+    def test_wilson_action_equivalence(self):
+        N, nspin, nc = 9, 4, 3
+        r = 1.0
+        kappa = 0.1234
+
+        I = identity(4)
+        gamma = Gamma('fermilab')
+
+        comm = Communicator()
+        space = comm.Lattice((N,N,N,N))
+        U = space.Field((space.d,nc,nc))
+        psi = space.Field((nspin,nc))        
+        phi = space.Field((nspin,nc))
+        chi = space.Field((nspin,nc))
+
+        U.set_cold()
+        p = space.Site((0,0,4,4))
+        psi[p,0,0] = 100.0
+        Dslash1 = FermiOperator(U).add_wilson4d_terms(kappa)
+        Dslash2 = FermiOperator(U)
+        Dslash2.add_term(1.0, None)
+        for mu in (1,2,3,4):
+            Dslash2.add_term(kappa*(r*I-gamma[mu]), [(mu,)])
+            Dslash2.add_term(kappa*(r*I+gamma[mu]), [(-mu,)])
+        Dslash1(phi,psi)
+        Dslash2(chi,psi)
+        self.assertTrue(numpy.linalg.norm((phi.data-chi.data).flat)<1.0e-6)
+
     def test_staggered_action(self):
         N, nc = 16, 3
         r = 1.0
@@ -1800,6 +1897,38 @@ class TestInverters(unittest.TestCase):
                 print 'fermi.%s.%s.real.vtk' % (spin,i)
                 phi.data_component((spin,i)).save('fermi.%s.%s.real.vtk' % (spin,i))
 
+
+class TestSmearing(unittest.TestCase):
+    def test_gauge_smearing(self):
+        N, nc = 4, 3
+        comm = Communicator()
+        space = comm.Lattice((N,N,N,N))
+        U = space.Field((space.d,nc,nc))
+        U.set_cold()
+        op = GaugeSmearOperator(U).add_term([1],1.0).add_term([2,1,-2],0.1)
+        V = U.clone()
+        V.set_smeared(op)
+        self.assertTrue(abs(U.average_plaquette()-1.0)<1e-4)
+        self.assertTrue(abs(V.average_plaquette()-(1.0+0.1*6)**4)<1e-3)
+    def test_fermi_smearing(self):
+        I = identity(4)
+        N, nc,nspin = 9, 3, 4
+        comm = Communicator()
+        space = comm.Lattice((N,N,N,N))
+        U = space.Field((space.d,nc,nc))
+        U.set_cold()
+        psi = space.Field((nspin,nc))        
+        phi = space.Field((nspin,nc))
+        p = space.Site((0,0,4,4))
+        psi[p,0,0] = 100.0
+        S = FermiOperator(U).add_diagonal_term(1.0)        
+        for mu in (1,2,3,4): S.add_term(0.1*I,[(-mu,)]).add_term(0.1*I,[(mu,)])
+        for k in range(100):
+            S(phi,psi)
+            phi,psi = psi,phi
+            chi = numpy.real(phi.data_component((0,0)).data_slice((0,0)))
+            Canvas().imshow(chi).save('smear.%.2i.png' % k)
+            os.system('convert smear.%.2i.png smear.%.2i.jpg' % (k,k))
 
 def test():
         N, nspin, nc = 9, 4, 3

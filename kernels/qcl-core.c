@@ -355,6 +355,30 @@ kernel void heatbath(global cfloat_t *U,
 }
 
 
+kernel void smear_links(global cfloat_t *V,		      		      
+			global cfloat_t *U,		      		      
+			int d,
+			int n,
+			struct bbox_t bbox) {
+  size_t gid = get_global_id(0);
+  size_t idx = gid2idx(gid,&bbox);
+  size_t ixmu;
+  cfloat_t staples[MAXN*MAXN];
+  
+  for(int mu=0; mu<d; mu++) {
+    ixmu = (idx*d+mu)*n*n;
+    
+    //[inject:smear_paths]
+    // something like                                                         
+    // if(mu==0) aux0(V+ixmu,U,idx,&bbox);                                   
+    // if(mu==1) aux1(V+ixmu,U,idx,&bbox);                                   
+    // if(mu==2) aux2(V+ixmu,U,idx,&bbox);                                   
+    // if(mu==3) aux3(V+ixmu,U,idx,&bbox); 
+    for(int k=0; k<n*n; k++) V[ixmu+k] = staples[k];
+  }  
+}
+
+
 kernel void fermi_operator(global cfloat_t *phi,
 			   global cfloat_t *U,
 			   global cfloat_t *psi,
