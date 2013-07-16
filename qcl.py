@@ -541,6 +541,9 @@ class Field(object):
         self.data = numpy.zeros([self.lattice.size]+self.siteshape,dtype=dtype)
         if DEBUG:
             print 'allocating %sbytes' % int(self.lattice.size*self.sitesize*8)
+    def buffer(self, mode):
+        """ mode = 'r' or 'w' or 'rw' """
+        return self.lattice.comm.buffer(mode, self.data)
     def clone(self):
         return Field(self.lattice,self.siteshape,dtype=self.dtype)
 
@@ -710,8 +713,8 @@ class Field(object):
         source = makesource({'paths':code})
         def runner(source,self=self,name=name):
             shape = self.siteshape
-            out_buffer = self.lattice.comm.buffer('w',self.data)
-            U_buffer = self.lattice.comm.buffer('r',U.data)
+            out_buffer = self.buffer('w')
+            U_buffer = U.buffer('r')
             prg = self.lattice.comm.compile(source)
             function = getattr(prg,name+'_loop')
             function(self.lattice.comm.queue,(self.lattice.size,),None,
@@ -741,7 +744,7 @@ class GaugeField(Field):
         """ Uses a kernel to set all links to cold """
         shape = self.siteshape
         if not (len(shape)==3 and shape[1]==shape[2]): raise RuntimeError
-        data_buffer = self.lattice.comm.buffer('w',self.data)
+        data_buffer = self.buffer('w')
         prg = self.lattice.comm.compile(makesource())
         prg.set_cold(self.lattice.comm.queue,(self.lattice.size,),None,
                      data_buffer,numpy.int32(shape[0]),numpy.int32(shape[1]),
@@ -752,7 +755,7 @@ class GaugeField(Field):
         """ Uses a kernel to set all links to come cutsom values, for testing only """
         shape = self.siteshape
         if not (len(shape)==3 and shape[1]==shape[2]): raise RuntimeError
-        data_buffer = self.lattice.comm.buffer('w',self.data)
+        data_buffer = self.buffer('w')
         prg = self.lattice.comm.compile(makesource())
         prg.set_custom(self.lattice.comm.queue,(self.lattice.size,),None,
                        data_buffer,numpy.int32(shape[0]),numpy.int32(shape[1]),
@@ -773,7 +776,7 @@ class GaugeField(Field):
         """
         shape = self.siteshape
         if not (len(shape)==3 and shape[1]==shape[2]): raise RuntimeError
-        data_buffer = self.lattice.comm.buffer('w',self.data)
+        data_buffer = self.buffer('w')
         prg = self.lattice.comm.compile(makesource())
         prg.set_hot(self.lattice.comm.queue,(self.lattice.size,),None,
                     data_buffer,numpy.int32(shape[0]),numpy.int32(shape[1]),
@@ -923,7 +926,7 @@ class GaugeAction(object):
             lattice = U.lattice
             shape = U.siteshape
             if not (len(shape)==3 and shape[1]==shape[2]): raise RuntimeError
-            data_buffer = lattice.comm.buffer('rw',U.data)
+            data_buffer = U.buffer('rw')
             prg = lattice.comm.compile(source)
             for size, x in self.lattice.bbox_range(displacement):
                 if DEBUG:
@@ -985,8 +988,8 @@ class GaugeSmearOperator(GaugeAction):
             lattice  = U.lattice
             shape = U.siteshape
             if not (len(shape)==3 and shape[1]==shape[2]): raise RuntimeError
-            data_buffer_V = lattice.comm.buffer('w',V.data)
-            data_buffer_U = lattice.comm.buffer('r',U.data)
+            data_buffer_V = V.buffer('w')
+            data_buffer_U = U.buffer('r')
             prg = U.lattice.comm.compile(source)
             event = prg.smear_links(
                 lattice.comm.queue,
@@ -1138,13 +1141,14 @@ class FermiOperator(object):
                                    for i in range(len(extra_fields))
                                    ) if extra_fields else ''
         key = 'fermi_operator' if nspin>1 else 'staggered_operator'
-        source = makesource({'paths':code, key:action, 'extra_fields': extra_fields_def})
+        source = makesource({'paths':code, key:action,
+                             'extra_fields': extra_fields_def})
         def runner(source,self=self,phi=phi,U=U,psi=psi):
 
-            phi_buffer = U.lattice.comm.buffer('rw',phi.data)
-            U_buffer = U.lattice.comm.buffer('r',U.data)
-            extra_buffers = [U.lattice.comm.buffer('r',e.data) for e in extra_fields]
-            psi_buffer = U.lattice.comm.buffer('r',psi.data)
+            phi_buffer = phi.buffer('rw')
+            U_buffer = U.buffer('r')
+            extra_buffers = [e.buffer('r') for e in extra_fields]
+            psi_buffer = psi.buffer('r')
             prg = U.lattice.comm.compile(source)
             if nspin>1:
                 meta_event = prg.fermi_operator
@@ -1799,7 +1803,8 @@ class TestPathKernels(unittest.TestCase):
 
     def make_kernel(self,comm,kernel_code,name,U):
         ### fix this, there need to be a parallel loop over sites
-        u_buffer = cl.Buffer(comm.ctx, comm.mf.READ_ONLY | comm.mf.COPY_HOST_PTR,
+        u_buffer = cl.Buffer(comm.ctx, comm.mf.READ_ONLY | 
+                             comm.mf.COPY_HOST_PTR,
                              hostbuf=U.data)
         out_buffer = cl.Buffer(comm.ctx, comm.mf.WRITE_ONLY, 256) ### FIX NBYTES
         idx_buffer = cl.Buffer(comm.ctx, comm.mf.READ_ONLY, 32) # should not be
