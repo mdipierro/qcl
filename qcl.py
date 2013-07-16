@@ -556,6 +556,7 @@ class Field(object):
             raise TypeError("Cannot copy incompatible fields")
         self.dtype = other.dtype
         self.data[:] = other.data
+
     def data_component(self,component):
         """
         Returns a new field containing a given component of the current field
@@ -568,7 +569,8 @@ class Field(object):
         for i in xrange(self.lattice.size):
             newfield.data[i] = self.data[i][component]
         return newfield
-    def data_slice(self,slice_coords):
+
+    def lattice_slice(self,slice_coords):
         """
         Returns a numpy slice of the current self.data at coordinates c
         """
@@ -578,10 +580,16 @@ class Field(object):
         t = self.lattice.coords2global(coords)
         s = product(d)
         return self.data[t:t+s].reshape(d)
+
+    def slice(self,slice_coords,components,projector = numpy.real):
+        return projector(self.data_component(components)\
+                             .lattice_slice(slice_coords))
+
     def __imul__(self,other):
         """ a *= c """
         self.data *= other
         return self
+
     def __iadd__(self,other):
         """ a += b """
         if isinstance(other,Op):
@@ -1750,7 +1758,7 @@ class TestFieldTypes(unittest.TestCase):
         U.check_unitarity()
 
         psi = U.data_component((0,0,0))
-        #Canvas().imshow(numpy.real(psi.data_slice((0,0)))).save()
+        #Canvas().imshow(numpy.real(psi.lattice_slice((0,0)))).save()
         psi = space.FermiField(nspin,nc)
         chi = space.FermiField(nspin,nc)
         psi[(0,0,0,0),1,2] = 0.0 # set component to zezo
@@ -1859,7 +1867,7 @@ class TestFermions(unittest.TestCase):
         for k in range(10):
             phi.set(Dslash,psi)
             # project spin=0, color=0 component, plane passing fox t=0,x=0
-            chi = numpy.real(psi.data_component((0,0)).data_slice((0,0)))
+            chi = psi.slice((0,0),(0,0))
             Canvas().imshow(chi).save('fermi.%.2i.png' % k)
             phi,psi = psi,phi
 
@@ -1929,7 +1937,7 @@ class TestFermions(unittest.TestCase):
         for k in range(10):
             phi.set(Dslash,psi)
             # project color=0 component, plane passing fox t=0,x=0
-            chi = numpy.real(psi.data_component((0,)).data_slice((0,0)))
+            chi = psi.slice((0,0),(0,))
             Canvas().imshow(chi).save('staggered.%.2i.png' % k)
             phi,psi = psi,phi
 
@@ -1982,18 +1990,19 @@ class TestInverters(unittest.TestCase):
             Dslash.add_term(kappa*(r*I-gamma[mu]), [(mu,)])
             Dslash.add_term(kappa*(r*I+gamma[mu]), [(-mu,)])
         phi.set(invert_bicgstab,Dslash,psi)
-        chi = numpy.real(phi.data_component((0,0)).data_slice((0,0)))
+        chi = phi.slice((0,0),(0,0))
         Canvas().imshow(chi).save('fermi.prop.png')
         out = space.FermiField(nspin,nc)
         out.set(Dslash,phi)
-        chi = numpy.real(out.data_component((0,0)).data_slice((0,0)))
+        chi = out.slice((0,0),(0,0))
         Canvas().imshow(chi).save('fermi.out.png')
-        chi = numpy.real(psi.data_component((0,0)).data_slice((0,0)))
+        chi = psi.slice((0,0),(0,0))
         Canvas().imshow(chi).save('fermi.in.png')
         for spin in range(4):
             for i in range(3):
                 print 'fermi.%s.%s.real.vtk' % (spin,i)
-                phi.data_component((spin,i)).save('fermi.%s.%s.real.vtk' % (spin,i))
+                phi.data_component((spin,i))\
+                    .save('fermi.%s.%s.real.vtk' % (spin,i))
 
 
 class TestSmearing(unittest.TestCase):
@@ -2024,7 +2033,7 @@ class TestSmearing(unittest.TestCase):
         for k in range(10):
             S(phi,psi)
             phi,psi = psi,phi
-            chi = numpy.real(phi.data_component((0,0)).data_slice((0,0)))
+            chi = phi.slice((0,0),(0,0))
             Canvas().imshow(chi).save('smear.%.2i.png' % k)
             os.system('convert smear.%.2i.png smear.%.2i.jpg' % (k,k))
 
