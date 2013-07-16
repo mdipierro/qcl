@@ -713,8 +713,12 @@ class Field(object):
             cl.enqueue_copy(self.lattice.comm.queue, self.data, out_buffer).wait()
             return self
         return Code(source,runner)
+
     def set_link_product(self,U,paths,name='aux'):
         return self.compute_link_product(U,paths,name).run()
+
+    def set(self,operator,*args,**kwargs):
+        return operator(self,*args,**kwargs)
 
 class GaugeField(Field):
     def __init__(self, lattice, nc, dtype=numpy.complex64):
@@ -1853,7 +1857,7 @@ class TestFermions(unittest.TestCase):
             Dslash.add_term(kappa*(r*I-gamma[mu]), [(mu,)])
             Dslash.add_term(kappa*(r*I+gamma[mu]), [(-mu,)])
         for k in range(10):
-            Dslash(phi,psi)
+            phi.set(Dslash,psi)
             # project spin=0, color=0 component, plane passing fox t=0,x=0
             chi = numpy.real(psi.data_component((0,0)).data_slice((0,0)))
             Canvas().imshow(chi).save('fermi.%.2i.png' % k)
@@ -1882,8 +1886,8 @@ class TestFermions(unittest.TestCase):
         for mu in (1,2,3,4):
             Dslash2.add_term(kappa*(r*I-gamma[mu]), [(mu,)])
             Dslash2.add_term(kappa*(r*I+gamma[mu]), [(-mu,)])
-        Dslash1(phi,psi)
-        Dslash2(chi,psi)
+        phi.set(Dslash1,psi)
+        chi.set(Dslash2,psi)
         self.assertTrue(numpy.linalg.norm((phi.data-chi.data).flat)<1.0e-6)
 
     def test_clover_action(self):
@@ -1905,7 +1909,7 @@ class TestFermions(unittest.TestCase):
         Dslash = FermiOperator(U)\
             .add_wilson4d_terms(kappa)\
             .add_clover4d_terms(csw)
-        Dslash(phi,psi)
+        phi.set(Dslash,psi)
 
 
     def test_staggered_action(self):
@@ -1923,7 +1927,7 @@ class TestFermions(unittest.TestCase):
         psi[(0,0,N/2,N/2),0] = 100.0
         Dslash = FermiOperator(U).add_staggered_terms(kappa)
         for k in range(10):
-            Dslash(phi,psi)
+            phi.set(Dslash,psi)
             # project color=0 component, plane passing fox t=0,x=0
             chi = numpy.real(psi.data_component((0,)).data_slice((0,0)))
             Canvas().imshow(chi).save('staggered.%.2i.png' % k)
@@ -1977,11 +1981,11 @@ class TestInverters(unittest.TestCase):
         for mu in (1,2,3,4):
             Dslash.add_term(kappa*(r*I-gamma[mu]), [(mu,)])
             Dslash.add_term(kappa*(r*I+gamma[mu]), [(-mu,)])
-        invert_bicgstab(phi,Dslash,psi)
+        phi.set(invert_bicgstab,Dslash,psi)
         chi = numpy.real(phi.data_component((0,0)).data_slice((0,0)))
         Canvas().imshow(chi).save('fermi.prop.png')
         out = space.FermiField(nspin,nc)
-        Dslash(out,phi)
+        out.set(Dslash,phi)
         chi = numpy.real(out.data_component((0,0)).data_slice((0,0)))
         Canvas().imshow(chi).save('fermi.out.png')
         chi = numpy.real(psi.data_component((0,0)).data_slice((0,0)))
@@ -2046,7 +2050,7 @@ def test():
             Dslash = FermiOperator(U)
             Dslash.add_wilson4d_terms(kappa)
             Dslash.add_clover4d_terms(c_SW)
-            Dslash(phi, psi)
+            phi.set(Dslash, psi)
 
 if __name__=='__main__':
     # python -m unittest test_module.TestClass.test_method
