@@ -79,7 +79,7 @@ class Canvas(object):
     def binary(self):
         return self.save(None)
     def hist(self,data,bins=20,color='blue',legend=None):
-        q = self.ax.hist(data,bins)            
+        q = self.ax.hist(data,bins)
         if legend: self.legend.append((q[0],legend))
         return self
     def plot(self,data,color='blue',style='-',width=2,legend=None):
@@ -129,7 +129,7 @@ def is_multiple_paths(paths):
     return isinstance(paths,(list,tuple)) and all(is_single_path(x) for x in paths)
 
 def random_name():
-    """ 
+    """
     Auxiliary function user to create a random sequence of alphanumeric characters
     It is user to generate function names
     """
@@ -300,14 +300,13 @@ def makesource(vars=None,filename='kernels/qcl-core.c'):
     """ Loads and compiles a kernel """
     source = open(filename).read()
     for key,value in (vars or {}).items():
-        source = source.replace('//[inject:%s]'%key,value)        
+        source = source.replace('//[inject:%s]'%key,value)
     lines = [line.strip() for line in source.split('\n')]
     newlines = []
     padding = 0
     for line in lines:
-        #if line and not line[:1] in '}#':
         if not line.startswith('}') and line:
-            if padding==0 and newlines:
+            if padding==0 and newlines and not line.startswith('#'):
                 newlines.append('\n')
             newlines.append(' '*padding+line)
         padding += 4*(line.count('{')-line.count('}'))
@@ -353,8 +352,8 @@ class Communicator(object):
         """ MPI recv """
         if not IGNORE_NOT_IMPLEMENTED: raise NotImplementedError
     def Lattice(self,shape,bboxs=None):
-        """ 
-        Creates a new lattice that lives on the device 
+        """
+        Creates a new lattice that lives on the device
         shape is a tuple with the dimensions of the site tensor.
         """
         return Lattice(self,shape,bboxs)
@@ -396,13 +395,13 @@ class Lattice(object):
         size = 1
         for i in range(self.d):
             size *= int(self.bbox[i+2*MAXD]/self.bbox[i+5*MAXD])
-        return size        
+        return size
     def bbox_range(self,displacement):
         """
         This is an iterator that allows looping over checkboard-like
         subsets of the lattice bbox. A bbox is a subset of the lattice
         padded with buffers.
-        "displacement" is the min distance between two sites that can 
+        "displacement" is the min distance between two sites that can
         updated simultaneously without affecting each other.
         This iterator is used in the heatbath algorithm
         """
@@ -416,9 +415,9 @@ class Lattice(object):
     ### end bbox stuff
 
     def prng_on(self,seed):
-        """ 
-        Initializes the parallel random number generator 
-        It currently uses ranlux, the Lusher's generator 
+        """
+        Initializes the parallel random number generator
+        It currently uses ranlux, the Lusher's generator
         which comes with pyOpenCL
         """
         self.seed = seed
@@ -430,7 +429,7 @@ class Lattice(object):
                         numpy.uint32(seed),self.prngstate_buffer)
     def prng_get(self):
         """ Retrieves the state of the prng from device """
-        cl.enqueue_copy(self.comm.queue, self.prngstate, 
+        cl.enqueue_copy(self.comm.queue, self.prngstate,
                         self.prngstate_buffer).wait()
     def prng_off(self):
         """ Disabled the prng on device"""
@@ -477,7 +476,7 @@ class Site(object):
     def __add__(self,mu):
         """
         Example:
-        >>> lattice = Lattice((4,4,4,4))
+        >>> lattice = Lattice([4,4,4,4])
         >>> p = Site(lattice,0,0,0,0)
         >>> q = p + 1
         >>> assert p.coords == (0,1,0,0)
@@ -528,7 +527,7 @@ class Field(object):
     the others MUST be done in OpenCL only!
 
     Example:
-    >>> lattice = Lattice((4,4,4,4))
+    >>> lattice = Lattice([4,4,4,4])
     >>> phi = Field(lattice,(4,3),dtype=numpy.complex64)
 
     dtype=numpy.complex64 is the default and some algorithms rely on this value.
@@ -540,16 +539,16 @@ class Field(object):
         self.size = lattice.size * self.sitesize
         self.dtype = dtype
         self.data = numpy.zeros([self.lattice.size]+self.siteshape,dtype=dtype)
-        if DEBUG: 
+        if DEBUG:
             print 'allocating %sbytes' % int(self.lattice.size*self.sitesize*8)
     def clone(self):
         return Field(self.lattice,self.siteshape,dtype=self.dtype)
-             
+
     def set_copy(self,other):
         """
         Makes a copy of field b into field a
-        Exmaple:        
-        >>> a.set_copy(b) 
+        Exmaple:
+        >>> a.set_copy(b)
         """
         if not (self.lattice == self.lattice and
                 self.siteshape==other.siteshape and
@@ -559,12 +558,12 @@ class Field(object):
         self.data[:] = other.data
     def data_component(self,component):
         """
-        Returns a new field containing a given component of the current field 
+        Returns a new field containing a given component of the current field
         Example:
         >>> phi = Field(lattice,(4,3))
         >>> psi00 = phi.data_component((0,0))
         """
-        
+
         newfield = self.lattice.Field((1,))
         for i in xrange(self.lattice.size):
             newfield.data[i] = self.data[i][component]
@@ -660,7 +659,7 @@ class Field(object):
         """ Saves the field supports *.npy and *.vtk (for 4 only)"""
         format = filename.split('.')[-1].lower()
         if format == 'npy':
-            numpy.save(filename,self.data)            
+            numpy.save(filename,self.data)
         elif format == 'vtk' or self.d!=4 or self.siteshape!=(1,):
             ostream = open(filename,'wb')
             s = product(self.lattice.shape[-3:])
@@ -672,7 +671,7 @@ class Field(object):
                 'ORIGIN     0 0 0\n'+\
                 'SPACING    1 1 1\n'+\
                 'POINT_DATA %s' % s
-            ostream.write(h1)            
+            ostream.write(h1)
             for t in xrange(self.lattice.shape[0]):
                 h2 = '\nSCALARS t%s float\nLOOKUP_TABLE default\n' % t
                 ostream.write(h2)
@@ -690,14 +689,14 @@ class Field(object):
         """
         Generates a kernel to set the field to the sum of specified product of links
         If trace == True the product of links is traced.
-        name is the name of the generate OpenCL function which performs the 
+        name is the name of the generate OpenCL function which performs the
         product of links.
         """
-        name = name or random_name()        
+        name = name or random_name()
         code = opencl_paths(function_name = name,
                             lattice = self.lattice,
                             coefficients = [1.0 for p in paths],
-                            paths = paths,                            
+                            paths = paths,
                             nc = U.data.shape[-1],
                             trace = (self.data.shape[-1]==1))
         source = makesource({'paths':code})
@@ -712,7 +711,7 @@ class Field(object):
                      numpy.int32(shape[0]), # 1 for trace, nc for no-trace
                      self.lattice.bbox).wait()
             cl.enqueue_copy(self.lattice.comm.queue, self.data, out_buffer).wait()
-            return self        
+            return self
         return Code(source,runner)
 
 class GaugeField(Field):
@@ -803,8 +802,8 @@ class GaugeField(Field):
         """
         if not paths:
             paths = bc_symmetrize(shape,d=self.lattice.d,positive_only=True)
-            paths = remove_duplicates(paths,bidirectional=True)        
-        # print 'average_plaquette.paths=',paths        
+            paths = remove_duplicates(paths,bidirectional=True)
+        # print 'average_plaquette.paths=',paths
         code = self.lattice.Field(1).set_link_product(self,paths)
         phi=code.run()
         #for idx in xrange(self.lattice.size):
@@ -816,8 +815,8 @@ class GaugeField(Field):
         fields = []
         for mui in range(0,self.d-1):
             for nui in range(mui+1,self.d):
-                mu = mui if mui>0 else self.d 
-                nu = nui if nui>0 else self.d 
+                mu = mui if mui>0 else self.d
+                nu = nui if nui>0 else self.d
                 # comput forward clover leaf
                 paths = [(mu,nu,-mu,-nu),(nu,-mu,-nu,mu),(-mu,-nu,mu,nu),(-nu,mu,nu,-mu)]
                 code = self.lattice.Field((nc,nc)).set_link_product(self,paths)
@@ -843,7 +842,7 @@ class FermiField(Field):
 class StaggeredField(Field):
     """ notice: I believe this assume GAMMA['fermilab'] """
     def __init__(self, lattice, nc, dtype=numpy.complex64):
-        Field.__init__(self, lattice, (nc,), dtype=dtype)        
+        Field.__init__(self, lattice, (nc,), dtype=dtype)
         self.nc = nc
 
     def clone(self):
@@ -860,13 +859,13 @@ class GaugeAction(object):
         self.terms = []
     def add_term(self,paths,coefficient=1.0):
         """
-        Paths are symmetrized. For example: 
-        >>> wilson = GaugeAction(lattice).add_term((1,2,-1,-2)) 
+        Paths are symmetrized. For example:
+        >>> wilson = GaugeAction(lattice).add_term((1,2,-1,-2))
         is the Wilson action.
         """
         if is_single_path(paths):
             paths = bc_symmetrize(paths,d=self.lattice.d)
-            paths = remove_duplicates(paths,bidirectional=False)            
+            paths = remove_duplicates(paths,bidirectional=False)
         elif not is_multiple(paths):
             raise RuntimeError('invalid action term')
         self.terms.append((coefficient,paths))
@@ -880,7 +879,7 @@ class GaugeAction(object):
         """
         Generates a kernel which performs the SU(n) heatbath.
         Example:
-        >>> wilson = GaugeAction(lattice).add_term((1,2,-1,-2)) 
+        >>> wilson = GaugeAction(lattice).add_term((1,2,-1,-2))
         >>> wilson.heatbath(beta,n_iter=10)
         """
         U = self.U
@@ -894,7 +893,7 @@ class GaugeAction(object):
                 for path in opaths:
                     coefficients.append(coefficient)
                     displacement = max(displacement,range_path(path)+1)
-                    paths.append(backward_path(path))                    
+                    paths.append(backward_path(path))
             code += opencl_paths(function_name = name+str(mu),
                                  lattice = self.lattice,
                                  coefficients=coefficients,
@@ -902,7 +901,7 @@ class GaugeAction(object):
                                  nc = U.data.shape[-1],
                                  initialize=True,
                                  trace=False)
-        action = '\n'.join('if(mu==%i) %s%i(staples,U,idx,&bbox);' % 
+        action = '\n'.join('if(mu==%i) %s%i(staples,U,idx,&bbox);' %
                            (i,name,i) for i in range(U.d))
         source = makesource({'paths':code,'heatbath_action':action})
         def runner(source,self=self,beta=beta,n_iter=n_iter,m_iter=m_iter,
@@ -953,7 +952,7 @@ class GaugeSmearOperator(GaugeAction):
         for mu in range(U.d):
             coefficients,paths = [], []
             for coefficient, cpaths in self.terms:
-                for path in cpaths: 
+                for path in cpaths:
                     if is_closed_path(listify(path)+[-mu if mu else -4]):
                         coefficients.append(coefficient)
                         paths.append(path)
@@ -965,7 +964,7 @@ class GaugeSmearOperator(GaugeAction):
                                  nc = U.data.shape[-1],
                                  initialize=True,
                                  trace=False)
-        action = '\n'.join('if(mu==%i) %s%i(staples,U,idx,&bbox);' % 
+        action = '\n'.join('if(mu==%i) %s%i(staples,U,idx,&bbox);' %
                            (i,name,i) for i in range(U.d))
         source = makesource({'paths':code,'smear_links':action})
         def runner(source,self=self,V=V):
@@ -1014,8 +1013,8 @@ class FermiOperator(object):
         gamma is a number when paths is None (the identity term)
 
         if paths is None than psi = gamma * phi
- 
-        Paths are symmetrized. For example: 
+
+        Paths are symmetrized. For example:
         >>> wilson = FermiOperator(U).add_term(
             kappa,(1-gamma[0]),path = [(4,)])
         >>> wilson = FermiOperator(U).add_term(
@@ -1068,28 +1067,28 @@ class FermiOperator(object):
                            gamma=GAMMA['fermilab']):
         clover = self.U.clover()
         n = len(self.extra_fields)
-        self.extra_fields += self.U.clover()        
+        self.extra_fields += self.U.clover()
         self.extra = range(len(self.extra_fields))
-        self.add_term(-2.0*c_SW*c_E*gamma[4]*gamma[1],n+0) # Ex                       
-        self.add_term(-2.0*c_SW*c_E*gamma[4]*gamma[2],n+1) # Ey                       
-        self.add_term(-2.0*c_SW*c_E*gamma[4]*gamma[3],n+2) # Ez                       
-        self.add_term(-2.0*c_SW*c_B*gamma[1]*gamma[2],n+3) # Bx                       
-        self.add_term(-2.0*c_SW*c_B*gamma[1]*gamma[3],n+4) # By                       
+        self.add_term(-2.0*c_SW*c_E*gamma[4]*gamma[1],n+0) # Ex
+        self.add_term(-2.0*c_SW*c_E*gamma[4]*gamma[2],n+1) # Ey
+        self.add_term(-2.0*c_SW*c_E*gamma[4]*gamma[3],n+2) # Ez
+        self.add_term(-2.0*c_SW*c_B*gamma[1]*gamma[2],n+3) # Bx
+        self.add_term(-2.0*c_SW*c_B*gamma[1]*gamma[3],n+4) # By
         self.add_term(-2.0*c_SW*c_B*gamma[2]*gamma[3],n+5) # Bz
         return self
 
     # end action specific helper functions
-        
+
     def __call__(self,phi,psi):
         return self.multiply(phi,psi).run()
 
     def multiply(self,phi,psi):
         """
         Computes phi = D[U]*psi
-        
+
         Generates a kernel which performs the SU(n) heatbath.
         Example:
-        >>> wilson = GaugeAction(U).add_term(1.0,(1,2,-1,-2)) 
+        >>> wilson = GaugeAction(U).add_term(1.0,(1,2,-1,-2))
         >>> wilson.heatbath(beta,n_iter=10)
         """
         U, extra_fields = self.U, self.extra_fields
@@ -1119,7 +1118,7 @@ class FermiOperator(object):
                                      nc = nc,
                                      initialize = True,
                                      trace = False)
-            
+
                 k += 1
         action = opencl_fermi_operator(self.terms,U.d,nspin,nc,name)
         extra_fields_def = ''.join(',global cfloat_t *extra%i' % i
@@ -1354,7 +1353,7 @@ def opencl_paths(function_name, # name of the generated function
     out points to one complex number.
     """
     if DEBUG:
-        print 'generating',function_name 
+        print 'generating',function_name
     DEFINE = precision+' %s = ('+precision+')(0.0,0.0);'
     NAME = 'm%.2i'
     CX = '%s_%ix%i'
@@ -1412,7 +1411,7 @@ def opencl_paths(function_name, # name of the generated function
                                 var = CX % (name,i,j)
                                 var2 = CX % (name2,j,i)
                                 code.append('%s.x = %s.x;' % (var2, var))
-                                code.append('%s.y = -%s.y;' % (var2, var))                    
+                                code.append('%s.y = -%s.y;' % (var2, var))
             # if this is a link but the first in path
             if z>0:
                 key = (site.coords,tuple(path[:z+1]))
@@ -1421,14 +1420,14 @@ def opencl_paths(function_name, # name of the generated function
                     name = NAME % len(matrices)
                     matrices[key] = name
                 else:
-                    name = matrices[key]                    
+                    name = matrices[key]
                 if not (site.coords,tuple(path[:z])) in matrices:
                     if z==1 and (site.coords,(-path[0],)) in matrices:
                         mu = -path[0]
                         key2 = (site.coords,(mu,)) # key for forward link
                         key3 = (site.coords,(-mu,)) # key for backward link
                         name2 = matrices[key2]
-                        name3 = NAME % len(matrices)                        
+                        name3 = NAME % len(matrices)
                         matrices[key3] = name3 # name for new link
                         for i in range(n):
                             for j in range(n):
@@ -1475,7 +1474,7 @@ def opencl_paths(function_name, # name of the generated function
             for j in range(n):
                 var = CX % (name, i,j)
                 vars.append((DEFINE % var)+' //4')
-            
+
     body = '\n'.join(' '*16+line.replace('\n','\n    ') for line in vars+code)
     return """void %(name)s(
                 %(precision)s *out,
@@ -1507,7 +1506,7 @@ def opencl_paths(function_name, # name of the generated function
 
 def opencl_fermi_operator(terms,d,nspin,nc,name='aux'):
     code = []
-    h = 0 
+    h = 0
     for gamma, opaths in terms:
         if opaths is None:
             if isinstance(gamma,(int,float)):
@@ -1542,7 +1541,7 @@ def opencl_fermi_operator(terms,d,nspin,nc,name='aux'):
                             coeff = gamma[r,c]
                             if coeff.real:
                                 line+="+ (%s)*p[%s].y" % (coeff.real,c*nc+i)
-                                spinor[k] += 1j                        
+                                spinor[k] += 1j
                             if coeff.imag:
                                 line+="+ (%s)*p[%s].x" % (coeff.imag,c*nc+i)
                                 spinor[k] += 1j
@@ -1552,7 +1551,7 @@ def opencl_fermi_operator(terms,d,nspin,nc,name='aux'):
         code.append('p = phi+idx*%s;' % (nspin*nc))
         is_wilson = isinstance(opaths,(list,tuple)) # else is clover-like
         if is_wilson:
-            code.append("%s%s(path,U,idx,&bbox);" % (name,h))        
+            code.append("%s%s(path,U,idx,&bbox);" % (name,h))
             h += 1
             path = opaths[0]
             site = [0]*d
@@ -1560,7 +1559,7 @@ def opencl_fermi_operator(terms,d,nspin,nc,name='aux'):
             for i in range(d): code.append('delta.s[%s] = %s;' % (i, site[i]))
             code.append('q = psi+idx2idx_shift(idx,delta,&bbox)*%s;' % (nspin*nc))
             pname = 'path'
-        else:            
+        else:
             pname = 'extra%i' % opaths
             code.append('p = psi+idx*%s;' % (nspin*nc))
         spinor = [0]*(nspin*nc)
@@ -1585,7 +1584,7 @@ def opencl_fermi_operator(terms,d,nspin,nc,name='aux'):
                         coeff = gamma[r,c]
                         if coeff.real:
                             line+="+ (%s)*q[%s].y" % (coeff.real,c*nc+i)
-                            spinor[k] += 1j                        
+                            spinor[k] += 1j
                         if coeff.imag:
                             line+="+ (%s)*q[%s].x" % (coeff.imag,c*nc+i)
                             spinor[k] += 1j
@@ -1628,7 +1627,7 @@ def opencl_fermi_operator(terms,d,nspin,nc,name='aux'):
                         counter += 1
                 line += ';'
                 if counter: code.append(line)
-                    
+
     return '\n'.join(code)
 
 # ###########################################################
@@ -1642,7 +1641,7 @@ def copy_elements(a,b):
         a[:] = b
     else:
         raise RuntimeError("Incompatible shape")
-        
+
 
 def vdot(a,b):
     if isinstance(a,Field) and isinstance(b,Field):
@@ -1692,16 +1691,16 @@ def invert_bicgstab(y,f,x,ap=1e-4,rp=1e-4,ns=200):
         beta = (rho/rho_old)*(alpha/omega)
         rho_old = rho
         p *= beta
-        p += r 
+        p += r
         p -= (beta*omega) * s
         f(s,p)
         alpha = rho/vdot(q,s)
         r -= alpha * s
         residue = math.sqrt(vdot(r,r).real/r.size)
-        norm = math.sqrt(vdot(y,y).real)     
+        norm = math.sqrt(vdot(y,y).real)
         f(t,r)
         omega = vdot(t,r)/vdot(t,t)
-        y += omega * r 
+        y += omega * r
         y += alpha * p
         if residue<max(ap,norm*rp):
             return y
@@ -1717,7 +1716,7 @@ class TestColdAndHotGauge(unittest.TestCase):
         comm = Communicator()
         for nc in range(2,4):
             for N in range(4,6):
-                space = comm.Lattice((N,N,N,N))
+                space = comm.Lattice([N,N,N,N])
                 U = space.GaugeField(nc)
                 U.set_cold()
                 U.check_unitarity()
@@ -1726,7 +1725,7 @@ class TestColdAndHotGauge(unittest.TestCase):
         comm = Communicator()
         for nc in range(2,4):
             for N in range(4,6):
-                space = comm.Lattice((N,N,N,N))
+                space = comm.Lattice([N,N,N,N])
                 U = space.GaugeField(nc)
                 U.set_hot()
                 U.check_unitarity()
@@ -1737,16 +1736,16 @@ class TestFieldTypes(unittest.TestCase):
         N, nc, nspin = 4, 3, 4
         parameters = {}
         comm = Communicator()
-        space = comm.Lattice((N,N,N,N))
+        space = comm.Lattice([N,N,N,N])
         U = space.GaugeField(nc)
         U.set_hot()
         U.check_unitarity()
-        U.set_cold()    
+        U.set_cold()
         U.check_cold()
         U.check_unitarity()
-        
+
         psi = U.data_component((0,0,0))
-        #Canvas().imshow(numpy.real(psi.data_slice((0,0)))).save()        
+        #Canvas().imshow(numpy.real(psi.data_slice((0,0)))).save()
         psi = space.FermiField(nspin,nc)
         chi = space.FermiField(nspin,nc)
         psi[(0,0,0,0),1,2] = 0.0 # set component to zezo
@@ -1764,7 +1763,7 @@ class TestPaths(unittest.TestCase):
         path = (+1,+2,-1,-2)
         paths = bc_symmetrize(path,d=4)
         self.assertTrue(
-            paths == 
+            paths ==
             [(2, 1, -2, -1), (3, 1, -3, -1), (4, 1, -4, -1), (-2, 1, 2, -1), (-3, 1, 3, -1),
              (-4, 1, 4, -1), (1, 2, -1, -2), (3, 2, -3, -2), (4, 2, -4, -2), (-1, 2, 1, -2),
              (-3, 2, 3, -2), (-4, 2, 4, -2), (1, 3, -1, -3), (2, 3, -2, -3), (4, 3, -4, -3),
@@ -1779,7 +1778,7 @@ class TestPaths(unittest.TestCase):
         self.assertTrue(paths == [(4, 1, -4, -1), (4, 3, -4, -3), (2, 1, -2, -1),
                                   (3, 2, -3, -2), (3, 1, -3, -1), (4, 2, -4, -2)])
         staples = derive_paths(paths,+1,bidirectional=True)
-        self.assertTrue(staples == [(-4, -1, 4), (4, -1, -4), (-2, -1, 2), 
+        self.assertTrue(staples == [(-4, -1, 4), (4, -1, -4), (-2, -1, 2),
                                     (2, -1, -2), (-3, -1, 3), (3, -1, -3)])
 
 
@@ -1799,7 +1798,7 @@ class TestPathKernels(unittest.TestCase):
     def test_opencl_paths(self):
         N, nc = 4, 3
         comm = Communicator()
-        space = comm.Lattice((N,N,N,N))
+        space = comm.Lattice([N,N,N,N])
         U = space.GaugeField(nc)
         paths = [(+1,+2,+3,-1,-2,-3)]
         kernel_code = opencl_paths(function_name='staples',
@@ -1814,7 +1813,7 @@ class TestHeatbath(unittest.TestCase):
     def test_heatbath(self):
         N, nc = 4, 3
         comm = Communicator()
-        space = comm.Lattice((N,N,N,N))
+        space = comm.Lattice([N,N,N,N])
         U = space.GaugeField(nc)
         U.set_cold()
         wilson = GaugeAction(U).add_plaquette_terms()
@@ -1824,7 +1823,7 @@ class TestHeatbath(unittest.TestCase):
         plq = []
         for k in range(400):
             code.run()
-            if k>100 and k%5==4: 
+            if k>100 and k%5==4:
                 plq.append(U.average_plaquette())
             if DEBUG:
                 print '<plaq> =', sum(plq)/len(pql)
@@ -1840,9 +1839,9 @@ class TestFermions(unittest.TestCase):
         gamma = GAMMA['fermilab']
 
         comm = Communicator()
-        space = comm.Lattice((N,N,N,N))
+        space = comm.Lattice([N,N,N,N])
         U = space.GaugeField(nc)
-        psi = space.FermiField(nspin,nc)        
+        psi = space.FermiField(nspin,nc)
         phi = space.FermiField(nspin,nc)
 
         U.set_cold()
@@ -1868,9 +1867,9 @@ class TestFermions(unittest.TestCase):
         gamma = GAMMA['fermilab']
 
         comm = Communicator()
-        space = comm.Lattice((N,N,N,N))
+        space = comm.Lattice([N,N,N,N])
         U = space.GaugeField(nc)
-        psi = space.FermiField(nspin,nc)        
+        psi = space.FermiField(nspin,nc)
         phi = space.FermiField(nspin,nc)
         chi = space.FermiField(nspin,nc)
 
@@ -1895,9 +1894,9 @@ class TestFermions(unittest.TestCase):
         gamma = GAMMA['fermilab']
 
         comm = Communicator()
-        space = comm.Lattice((N,N,N,N))
+        space = comm.Lattice([N,N,N,N])
         U = space.GaugeField(nc)
-        psi = space.FermiField(nspin,nc)        
+        psi = space.FermiField(nspin,nc)
         phi = space.FermiField(nspin,nc)
 
         U.set_cold()
@@ -1906,7 +1905,7 @@ class TestFermions(unittest.TestCase):
             .add_wilson4d_terms(kappa)\
             .add_clover4d_terms(csw)
         Dslash(phi,psi)
-        
+
 
     def test_staggered_action(self):
         N, nc = 16, 3
@@ -1914,9 +1913,9 @@ class TestFermions(unittest.TestCase):
         kappa = 0.1234
 
         comm = Communicator()
-        space = comm.Lattice((N,N,N,N))
+        space = comm.Lattice([N,N,N,N])
         U = space.GaugeField(nc)
-        psi = space.StaggeredField(nc)        
+        psi = space.StaggeredField(nc)
         phi = space.StaggeredField(nc)
 
         U.set_cold()
@@ -1933,10 +1932,10 @@ class TestFermions(unittest.TestCase):
 class TestInverters(unittest.TestCase):
     def test_minimum_residue(self):
         def f(a,b):
-            a[0,0] = b[0,0] 
-            a[0,1] = 0.7*b[0,1] 
-            a[1,0] = 0.8*b[1,0] 
-            a[1,1] = b[1,1] 
+            a[0,0] = b[0,0]
+            a[0,1] = 0.7*b[0,1]
+            a[1,0] = 0.8*b[1,0]
+            a[1,1] = b[1,1]
         a = numpy.array([[1.0,2.0],[3.0,4.0]])
         b = numpy.array([[0.0,0.0],[0.0,0.0]])
         c = numpy.array([[0.0,0.0],[0.0,0.0]])
@@ -1946,10 +1945,10 @@ class TestInverters(unittest.TestCase):
 
     def test_bicgstab(self):
         def f(a,b):
-            a[0,0] = b[0,0] 
+            a[0,0] = b[0,0]
             a[0,1] = 0.7*b[0,1]+0.1*b[0,0]
             a[1,0] = 0.8*b[1,0]+0.1*b[1,1]
-            a[1,1] = b[1,1] 
+            a[1,1] = b[1,1]
         a = numpy.array([[1.0,2.0],[3.0,4.0]])
         b = numpy.array([[0.0,0.0],[0.0,0.0]])
         c = numpy.array([[0.0,0.0],[0.0,0.0]])
@@ -1965,7 +1964,7 @@ class TestInverters(unittest.TestCase):
         gamma = GAMMA['fermilab']
 
         comm = Communicator()
-        space = comm.Lattice((N,N,N,N))
+        space = comm.Lattice([N,N,N,N])
         U = space.GaugeField(nc)
         psi = space.FermiField(nspin,nc)
         phi = space.FermiField(nspin,nc)
@@ -1976,7 +1975,7 @@ class TestInverters(unittest.TestCase):
         Dslash.add_term(1.0, None)
         for mu in (1,2,3,4):
             Dslash.add_term(kappa*(r*I-gamma[mu]), [(mu,)])
-            Dslash.add_term(kappa*(r*I+gamma[mu]), [(-mu,)])        
+            Dslash.add_term(kappa*(r*I+gamma[mu]), [(-mu,)])
         invert_bicgstab(phi,Dslash,psi)
         chi = numpy.real(phi.data_component((0,0)).data_slice((0,0)))
         Canvas().imshow(chi).save('fermi.prop.png')
@@ -1996,7 +1995,7 @@ class TestSmearing(unittest.TestCase):
     def test_gauge_smearing(self):
         N, nc = 4, 3
         comm = Communicator()
-        space = comm.Lattice((N,N,N,N))
+        space = comm.Lattice([N,N,N,N])
         U = space.GaugeField(nc)
         U.set_cold()
         op = GaugeSmearOperator(U).add_term([1],1.0).add_term([2,1,-2],0.1)
@@ -2009,7 +2008,7 @@ class TestSmearing(unittest.TestCase):
         I = identity(4)
         N, nc,nspin = 9, 3, 4
         comm = Communicator()
-        space = comm.Lattice((N,N,N,N))
+        space = comm.Lattice([N,N,N,N])
         U = space.GaugeField(nc)
         U.set_cold()
         psi = space.FermiField(nspin,nc)
@@ -2034,13 +2033,13 @@ def test():
         gamma = GAMMA['fermilab']
 
         comm = Communicator()
-        space = comm.Lattice((N,N,N,N))
+        space = comm.Lattice([N,N,N,N])
         U = space.GaugeField(nc)
         psi = space.FermiField(nspin,nc)
         phi = space.FermiField(nspin,nc)
 
         U.set_cold()
-        
+
         psi[(0,0,4,4),0,0] = 100.0
         if True:
             Dslash = FermiOperator(U)
