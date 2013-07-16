@@ -685,7 +685,7 @@ class Field(object):
         if not IGNORE_NOT_IMPLEMENTED: raise NotImplementedError
         return self
 
-    def set_link_product(self,U,paths,name='aux'):
+    def compute_link_product(self,U,paths,name='aux'):
         """
         Generates a kernel to set the field to the sum of specified product of links
         If trace == True the product of links is traced.
@@ -713,6 +713,8 @@ class Field(object):
             cl.enqueue_copy(self.lattice.comm.queue, self.data, out_buffer).wait()
             return self
         return Code(source,runner)
+    def set_link_product(self,U,paths,name='aux'):
+        return self.compute_link_product(U,paths,name).run()
 
 class GaugeField(Field):
     def __init__(self, lattice, nc, dtype=numpy.complex64):
@@ -804,8 +806,7 @@ class GaugeField(Field):
             paths = bc_symmetrize(shape,d=self.lattice.d,positive_only=True)
             paths = remove_duplicates(paths,bidirectional=True)
         # print 'average_plaquette.paths=',paths
-        code = self.lattice.Field(1).set_link_product(self,paths)
-        phi=code.run()
+        phi = self.lattice.Field(1).set_link_product(self,paths)
         #for idx in xrange(self.lattice.size):
         #    print idx, phi.data[idx]
         return phi.sum()/(self.lattice.size*len(paths)*self.siteshape[-1])
@@ -819,12 +820,12 @@ class GaugeField(Field):
                 nu = nui if nui>0 else self.d
                 # comput forward clover leaf
                 paths = [(mu,nu,-mu,-nu),(nu,-mu,-nu,mu),(-mu,-nu,mu,nu),(-nu,mu,nu,-mu)]
-                code = self.lattice.Field((nc,nc)).set_link_product(self,paths)
-                component = code.run()
+                component = self.lattice.Field((nc,nc))\
+                    .set_link_product(self,paths)
                 # reverse paths
                 paths = [(p[3],p[2],p[1],p[0]) for p in paths]
-                code = self.lattice.Field((nc,nc)).set_link_product(self,paths)
-                component -= code.run()
+                component -= self.lattice.Field((nc,nc))\
+                    .set_link_product(self,paths)
                 component *= 0.125
                 fields.append(component)
         return fields
@@ -1749,7 +1750,7 @@ class TestFieldTypes(unittest.TestCase):
         psi = space.FermiField(nspin,nc)
         chi = space.FermiField(nspin,nc)
         psi[(0,0,0,0),1,2] = 0.0 # set component to zezo
-        phi = space.Field(1).set_link_product(U,[(1,2,-1,-2),(2,4,-2,-4)]).run()
+        phi = space.Field(1).set_link_product(U,[(1,2,-1,-2),(2,4,-2,-4)])
         self.assertTrue(phi.sum() == 4**4 * 3*2)
         old = U.sum()
         U.save('test.npy')
