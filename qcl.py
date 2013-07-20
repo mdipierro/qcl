@@ -138,7 +138,7 @@ def random_name():
 
 def identity(n):
     """ Returns an identity matrix n x n """
-    return numpy.eye(n)
+    return numpy.matrix(numpy.eye(n))
 
 def hermitian(U):
     """ Returns the hermitian of the U matrix """
@@ -1041,12 +1041,10 @@ class FermiOperator(object):
         if paths is None: # diagonal term in operator
             if self.terms and self.terms[0][1] is None:
                 raise RuntimeError("cannot have two terms without paths")
-            #if not isinstance(gamma,(int,float)):
-            #    raise RuntimeError("gamma must be a simple number of no paths")
             self.terms.insert(0,(gamma,paths))
-        elif is_multiple_paths(paths): # sum of shift terms
-            self.terms.append((gamma,paths))
-        elif isinstance(paths,int) and paths in self.extra: # multiplication by extra fields
+        elif (isinstance(paths,numpy.matrix) or
+              is_multiple_paths(paths) or
+              (isinstance(paths,int) and paths in self.extra)):
             self.terms.append((gamma,paths))
         else:
             raise RuntimeError("invalid Path")
@@ -1125,6 +1123,7 @@ class FermiOperator(object):
         else:
             raise RuntimeError
         nc = shapeu[2]
+        k=0
         for gamma, opaths in self.terms:
             if isinstance(opaths,list):
                 code += opencl_paths(function_name = name+str(k),
@@ -1134,8 +1133,7 @@ class FermiOperator(object):
                                      nc = nc,
                                      initialize = True,
                                      trace = False)
-
-                k += 1
+            k += 1
         action = opencl_fermi_operator(self.terms,U.d,nspin,nc,name)
         extra_fields_def = ''.join(',global cfloat_t *extra%i' % i
                                    for i in range(len(extra_fields))
@@ -1335,14 +1333,168 @@ class Code(object):
         open('latest.c','w').write(self.source)
         return self.runner(self.source,*args,**kwargs)
 
-def opencl_matrix_multiply(matrix):
-    """ generates efficient code to multiply a known complex matrix by an unknown matrix """
+def mul_const(name1,coeff,name2,m,add=False):
+    lines = []
+    re = coeff.real
+    im = coeff.imag
+    mod = '+=' if add else '='
+    for k in range(m):
+        a = '%s[%s]' % (name1,k)
+        b = '%s[%s]' % (name2,k)        
+        if re==0 and im==0 and not add:
+            if not add:
+                lines.append('%s.x = 0;' % a)
+                lines.append('%s.y = 0;' % a)
+        elif re==1 and im==0:
+            lines.append('%s.x %s %s.x;' % (a,mod,b))
+            lines.append('%s.y %s %s.y;' % (a,mod,b))
+        elif re==-1 and im==0:
+            lines.append('%s.x %s - %s.x;' % (a,mod,b))
+            lines.append('%s.y %s - %s.y;' % (a,mod,b))
+        elif re==0 and im==1:
+            lines.append('%s.x %s - %s.y;' % (a,mod,b))
+            lines.append('%s.y %s %s.x;' % (a,mod,b))
+        elif re==0 and im==-1:
+            lines.append('%s.x %s %s.y;' % (a,mod,b))
+            lines.append('%s.y %s + %s.x;' % (a,mod,b))
+        else:
+            lines.append('%s.x %s (%s)*%s.x - (%s)*%s.y;' % (a,mod,re,b,im,b))
+            lines.append('%s.y %s (%s)*%s.y + (%s)*%s.x;' % (a,mod,re,b,im,b))
+    return lines
+
+def mul_coeff(name1,coeff,name2,m,add=False):
+    lines = []
+    mod = '+=' if add else '='
+    for k in range(m):
+        a = '%s[%s]' % (name1,k)
+        b = '%s[%s]' % (name2,k)        
+        lines.append('%s.x %s %s.x*%s.x - %s.y*%s.y;' % (
+                a,mod,coeff,b,coeff,b))
+        lines.append('%s.y %s %s.x*%s.y + %s.y*%s.x;' % (
+                a,mod,coeff,b,coeff,b))
+    return lines
+
+def mul_real_coeff(name1,coeff,name2,m,add=False):
+    lines = []
+    mod = '+=' if add else '='
+    for k in range(m):
+        a = '%s[%s]' % (name1,k)
+        b = '%s[%s]' % (name2,k)        
+        lines.append('%s.x %s %s*%s.x;' % (a,mod,coeff,b))
+        lines.append('%s.y %s %s*%s.y;' % (a,mod,coeff,b))
+    return lines
+
+def mul_spin_matrix(name1,matrix,name2,nc,add=False):
+    lines = []
+    mod = '+=' if add else '='
     m,n = matrix.shape
-    for i in range(m):
-        for j in range(n):
-            if matrix[i,j] != 0:
-                print i,j,matrix[i,j]
-    raise NotImplementedError
+    checks = [0.0]*(m*nc)
+    for alpha in range(m):
+        for i in range(nc):
+            namea = '%s[%s]' % (name1,alpha*nc+i)
+            terms_x = []
+            terms_y = []
+            for beta in range(n):
+                nameb = '%s[%s]' % (name2,beta*nc+i)    
+                re, im = matrix[alpha,beta].real, matrix[alpha,beta].imag
+                if re:
+                    terms_x.append('(%s)*%s.x' % (re,nameb))
+                    terms_y.append('(%s)*%s.y' % (re,nameb))
+                if im:
+                    terms_x.append('(%s)*%s.y' % (-im,nameb))
+                    terms_y.append('(%s)*%s.x' % (+im,nameb))
+            if terms_x:
+                lines.append('%s.x %s %s;' % (namea,mod,' + '.join(terms_x)))
+                checks[alpha*nc+i]+=1
+            elif not add:
+                lines.append('%s.x %s 0;' % (namea,mod))
+            if terms_y:
+                lines.append('%s.y %s %s;' % (namea,mod,' + '.join(terms_y)))
+                checks[alpha*nc+i]+=1j
+            elif not add:
+                lines.append('%s.y %s 0;' % (namea,mod))
+    return lines, checks
+
+
+def mul_color_matrix(name1,matrix,name2,nspin,add=False,checks=None):
+    lines = []
+    mod = '+=' if add else '='
+    nc,_ = matrix.shape
+    if nc!=_: raise RuntimeError("color matrix in not square")
+    for alpha in range(nspin):
+        for i in range(nc):
+            namea = '%s[%s]' % (name1,alpha*nc+i)
+            terms_x = []
+            terms_y = []
+            for j in range(nc):
+                nameb = '%s[%s]' % (name2,alpha*nc+j)    
+                re, im = matrix[i,j].real, matrix[i,j].imag
+                if re:
+                    terms_x.append('(%s)*%s.x' % (re,nameb))
+                    terms_y.append('(%s)*%s.y' % (re,nameb))
+                if im:
+                    terms_x.append('(%s)*%s.y' % (-im,nameb))
+                    terms_y.append('(%s)*%s.x' % (+im,nameb))
+            if terms_x and (not checks or checks[alpha*nc+j]):
+                lines.append('%s.x %s %s;' % (namea,mod,' + '.join(terms_x)))
+            elif not add:
+                lines.append('%s.x %s 0;' % (namea,mod))
+            if terms_y and (not checks or checks[alpha*nc+j]):
+                lines.append('%s.y %s %s;' % (namea,mod,' + '.join(terms_y)))
+            elif not add:
+                lines.append('%s.y %s 0;' % (namea,mod))
+    return lines
+
+def mul_link(name1,name2,name3,nspin,nc,add=False,checks=None):
+    lines = []
+    mod = '+=' if add else '='
+    for alpha in range(nspin):
+        for i in range(nc):
+            namea = '%s[%s]' % (name1,alpha*nc+i)
+            terms_x = []
+            terms_y = []
+            for j in range(nc):
+                nameb = '%s[%s]' % (name2,i*nc+j)
+                namec = '%s[%s]' % (name3,alpha*nc+j)    
+                terms_x.append('+%s.x*%s.x' % (nameb,namec))
+                terms_x.append('-%s.y*%s.y' % (nameb,namec))
+                terms_y.append('+%s.x*%s.y' % (nameb,namec))
+                terms_y.append('+%s.y*%s.x' % (nameb,namec))
+            if not checks or checks[alpha*nc+j]:
+                lines.append('%s.x %s %s;' % (namea,mod,' '.join(terms_x)))
+            elif not add:
+                lines.append('%s.x %s 0;' % (namea,mod))
+            if not checks or checks[alpha*nc+j]:
+                lines.append('%s.y %s %s;' % (namea,mod,' '.join(terms_y)))
+            elif not add:
+                lines.append('%s.y %s 0;' % (namea,mod))
+    return lines
+
+def mul_link_hermitian(name1,name2,name3,nspin,nc,add=False,checks=None):
+    lines = []
+    mod = '+=' if add else '='
+    for alpha in range(nspin):
+        for i in range(nc):
+            namea = '%s[%s]' % (name1,alpha*nc+i)
+            terms_x = []
+            terms_y = []
+            for j in range(nc):
+                nameb = '%s[%s]' % (name2,j*nc+i)
+                namec = '%s[%s]' % (name3,alpha*nc+j)    
+                terms_x.append('+%s.x*%s.x' % (nameb,namec))
+                terms_x.append('+%s.y*%s.y' % (nameb,namec))
+                terms_y.append('+%s.x*%s.y' % (nameb,namec))
+                terms_y.append('-%s.y*%s.x' % (nameb,namec))
+            if not checks or checks[alpha*nc+j]:
+                lines.append('%s.x %s %s;' % (namea,mod,' '.join(terms_x)))
+            elif not add:
+                lines.append('%s.x %s 0;' % (namea,mod))
+            if not checks or checks[alpha*nc+j]:
+                lines.append('%s.y %s %s;' % (namea,mod,' '.join(terms_y)))
+            elif not add:
+                lines.append('%s.y %s 0;' % (namea,mod))
+    return lines
+
 
 def opencl_paths(function_name, # name of the generated function
                  lattice, # lattice on which paths are generated
@@ -1524,128 +1676,57 @@ def opencl_paths(function_name, # name of the generated function
 def opencl_fermi_operator(terms,d,nspin,nc,name='aux'):
     code = []
     h = 0
+    code.append('q = phi + idx*%s;' % (nspin*nc)) #OUT
+    k = 0
     for gamma, opaths in terms:
-        if opaths is None:
-            if isinstance(gamma,(int,float)):
-                for r in range(nspin):
-                    for i in range(nc):
-                        code.append('idx2=idx*%s+%s;' % (nspin*nc, r*nc+i))
-                        code.append('phi[idx2].x = %s*psi[idx2].x;' % gamma)
-                        code.append('phi[idx2].y = %s*psi[idx2].y;' % gamma)
-            elif isinstance(gamma,complex) or nspin<2:
-                raise NotImplementedError
-            else:
-                spinor = [0]*(nspin*nc)
-                for r in range(nspin):
-                    for i in range(nc):
-                        k = (r*nc+i)
-                        spinor[k] = 0+0j
-                        code.append('idx2=idx*%s+%s;' % (nspin*nc, r*nc+i))
-                        code.append('p = psi+idx*%s;' % (nspin*nc))
-                        line = 'phi[idx2].x ='
-                        for c in range(nspin):
-                            coeff = gamma[r,c]
-                            if coeff.real:
-                                line+="+ (%s)*p[%s].x" % (coeff.real,c*nc+i)
-                                spinor[k] += 1
-                            if coeff.imag:
-                                line+="- (%s)*p[%s].y" % (coeff.imag,c*nc+i)
-                                spinor[k] += 1
-                        line+=';'
-                        if spinor[k].real: code.append(line)
-                        line = 'phi[idx2].y ='
-                        for c in range(nspin):
-                            coeff = gamma[r,c]
-                            if coeff.real:
-                                line+="+ (%s)*p[%s].y" % (coeff.real,c*nc+i)
-                                spinor[k] += 1j
-                            if coeff.imag:
-                                line+="+ (%s)*p[%s].x" % (coeff.imag,c*nc+i)
-                                spinor[k] += 1j
-                        line+=';'
-                        if spinor[k].imag: code.append(line)
-            continue
-        code.append('p = phi+idx*%s;' % (nspin*nc))
-        is_wilson = isinstance(opaths,(list,tuple)) # else is clover-like
-        if is_wilson:
-            code.append("%s%s(path,U,idx,&bbox);" % (name,h))
-            h += 1
+        is_color_diagonal = (opaths==None)
+        is_extra = isinstance(opaths,int) # for example clover
+        is_color_matrix = isinstance(opaths, numpy.matrix)
+        is_spin_matrix = isinstance(gamma, numpy.matrix)
+        is_spin_constant = isinstance(gamma,(int,float,complex))
+        is_staggered = isinstance(gamma, tuple)
+        is_shift = isinstance(opaths,(list,tuple)) or is_staggered
+        if is_color_diagonal or is_color_matrix or is_extra:
+            code.append('p = psi + idx*%s;' % (nspin*nc)) #IN
+        elif is_shift:
             path = opaths[0]
             site = [0]*d
             for step in opaths[0]: site[abs(step) % d] += 1 if step>0 else -1
             for i in range(d): code.append('delta.s[%s] = %s;' % (i, site[i]))
-            code.append('q = psi+idx2idx_shift(idx,delta,&bbox)*%s;' % (nspin*nc))
-            pname = 'path'
+            code.append('p = psi+idx2idx_shift(idx,delta,&bbox)*%s;' % (nspin*nc)) 
         else:
-            pname = 'extra%i' % opaths
-            code.append('p = psi+idx*%s;' % (nspin*nc))
-        spinor = [0]*(nspin*nc)
-        if nspin>1:
-            for r in range(nspin):
-                for i in range(nc):
-                    k = (r*nc+i)
-                    spinor[k] = 0+0j
-                    line = 'spinor[%s].x =' % k
-                    for c in range(nspin):
-                        coeff = gamma[r,c]
-                        if coeff.real:
-                            line+="+ (%s)*q[%s].x" % (coeff.real,c*nc+i)
-                            spinor[k] += 1
-                        if coeff.imag:
-                            line+="- (%s)*q[%s].y" % (coeff.imag,c*nc+i)
-                            spinor[k] += 1
-                    line+=';'
-                    if spinor[k].real: code.append(line)
-                    line = 'spinor[%s].y =' % k
-                    for c in range(nspin):
-                        coeff = gamma[r,c]
-                        if coeff.real:
-                            line+="+ (%s)*q[%s].y" % (coeff.real,c*nc+i)
-                            spinor[k] += 1j
-                        if coeff.imag:
-                            line+="+ (%s)*q[%s].x" % (coeff.imag,c*nc+i)
-                            spinor[k] += 1j
-                    line+=';'
-                    if spinor[k].imag: code.append(line)
-        else:
+            raise RuntimeError("Invalid term")
+        # deal with gamma structure
+        if is_spin_constant:
+            lines = mul_const('spinor',gamma,'p',nspin*nc)
+            checks = None
+        elif is_spin_matrix:
+            lines,checks = mul_spin_matrix('spinor',gamma,'p',nc)
+        elif is_staggered:
             (coeff, mu) = gamma
-            line = 'coeff = %s * idx2eta(idx,%s,&bbox);' % (coeff, mu % d)
-            code.append(line)
-            for k in range(nc):
-                line = 'spinor[%s].x = coeff*q[%s].x;' % (k,k)
-                code.append(line)
-                spinor[k] += 1
-                line = 'spinor[%s].y = coeff*q[%s].y;' % (k,k)
-                code.append(line)
-                spinor[k] += 1j
-        for r in range(nspin):
-            for i in range(nc):
-                counter = 0
-                line = 'p[%s].x += ' % (r*nc+i)
-                for j in range(nc):
-                    k = r*nc+j
-                    if spinor[k].real:
-                        line += '\n\t\t + %s[%s].x*spinor[%s].x' % (pname,i*nc+j,k)
-                        counter += 1
-                    if spinor[k].imag:
-                        line += '\n\t\t - %s[%s].y*spinor[%s].y' % (pname,i*nc+j,k)
-                        counter += 1
-                line += ';'
-                if counter: code.append(line)
-                counter = 0
-                line = 'p[%s].y += ' % (r*nc+i)
-                for j in range(nc):
-                    k = r*nc+j
-                    if spinor[k].imag:
-                        line += '\n\t + %s[%s].x*spinor[%s].y' % (pname,i*nc+j,k)
-                        counter += 1
-                    if spinor[k].real:
-                        line += '\n\t + %s[%s].y*spinor[%s].x' % (pname,i*nc+j,k)
-                        counter += 1
-                line += ';'
-                if counter: code.append(line)
-
-    return '\n'.join(code)
+            code.append('coeff = %s * idx2eta(idx,%s,&bbox);' % (coeff,mu%d))
+            lines =  mul_real_coeff('spinor','coeff','p',nspin*nc)
+            checks = None
+        else:
+            raise RuntimeError("Not supported term")
+        code += lines
+        # deal with color
+        if is_color_matrix:
+            code += mul_color_matrix('q', opaths, 'spinor', nspin, 
+                                     add=k>0, checks=checks)
+        elif is_shift:
+            code.append("%s%s(path,U,idx,&bbox);" % (name,k))
+            code += mul_link('q', 'path', 'spinor', nspin, nc,
+                             add=k>0, checks=checks)
+        elif is_extra:
+            code += mul_link('q', 'extra%s' % opaths, 'spinor', nspin, nc,
+                             add=k>0, checks=checks)
+        elif is_color_diagonal:
+            code += mul_const('q',1.0,'spinor', nspin*nc, add=k>0)
+        else:
+            raise RuntimeError("Not supported term %s" % ((gamma,opaths),))
+        k+=1
+    return '\n'.join(' '*10+line for line in code)
 
 # ###########################################################
 # inverters
@@ -1839,7 +1920,7 @@ class TestHeatbath(unittest.TestCase):
         code = wilson.heatbath(beta=4.0)
         # print code.source
         plq = []
-        for k in range(400):
+        for k in range(1000):
             code.run()
             if k>100 and k%5==4:
                 plq.append(U.average_plaquette())
@@ -1863,7 +1944,7 @@ class TestFermions(unittest.TestCase):
         phi = space.FermiField(nspin,nc)
 
         U.set_cold()
-        psi[(0,0,0,0),0,0] = 100.0
+        psi[(0,0,N/2,N/2),0,0] = 100.0
         Dslash = FermiOperator(U)
         Dslash.add_term(1.0, None)
         for mu in (1,2,3,4):
