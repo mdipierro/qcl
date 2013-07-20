@@ -350,6 +350,19 @@ kernel void smear_links(global cfloat_t *V,
 }
 
 
+kernel void local_scalar(global cfloat_t *chi,
+			 global cfloat_t *phi,
+			 global cfloat_t *psi,
+			 struct bbox_t bbox) {
+  size_t gid = get_global_id(0);
+  size_t idx = gid2idx(gid,&bbox);
+  global cfloat_t *p;
+  global cfloat_t *q;
+  global cfloat_t *s;
+
+  //[inject:local_scalar]
+}
+
 kernel void fermi_operator(global cfloat_t *phi,
                            global cfloat_t *U,
                            global cfloat_t *psi,

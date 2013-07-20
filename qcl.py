@@ -455,6 +455,9 @@ class Lattice(object):
     def Field(self,siteshape,dtype=numpy.complex64):
         """ Returns a Field constructor for this """
         return Field(self,siteshape,dtype=dtype)
+    def ComplexScalarField(self,dtype=numpy.complex64):
+        """ Returns a Field constructor for this """
+        return ComplexScalarField(self,dtype=dtype)
     def GaugeField(self,nc,dtype=numpy.complex64):
         """ Returns a Field constructor for this """
         return GaugeField(self,nc,dtype=dtype)
@@ -665,7 +668,7 @@ class Field(object):
         """ returns a ndarray with the fft over the spatial self.data """
         return numpy.fft.fftn(
             self.data.reshape(self.lattice.shape+self.siteshape),
-            axes=range(0 if time else 1,self.d))
+            axes=range(0 if time else 1,self.lattice.d))
     def save(self,filename):
         """ Saves the field supports *.npy and *.vtk (for 4 only)"""
         format = filename.split('.')[-1].lower()
@@ -730,6 +733,21 @@ class Field(object):
 
     def set(self,operator,*args,**kwargs):
         return operator(self,*args,**kwargs)
+
+    def contract(self,other):
+        if self.data.shape != other.data.shape:
+            raise RuntimeError("Cannot be contracted")
+        result = self.lattice.Field((1,))
+        for k in range(self.lattice.size):
+            result.data[k] = numpy.vdot(self.data[k],other.data[k])
+        return result
+
+class ComplexScalarField(Field):
+    def __init__(self, lattice, dtype=numpy.complex64):
+        Field.__init__(self, lattice, (1,), dtype=dtype)
+
+    def clone(self):
+        return ComplexScalarField(self.lattice, dtype=self.dtype)
 
 class GaugeField(Field):
     def __init__(self, lattice, nc, dtype=numpy.complex64):
@@ -844,6 +862,7 @@ class GaugeField(Field):
                 component *= 0.125
                 fields.append(component)
         return fields
+    
 
 class FermiField(Field):
     def __init__(self, lattice, nspin, nc, dtype=numpy.complex64):
@@ -853,7 +872,6 @@ class FermiField(Field):
 
     def clone(self):
         return FermiField(self.lattice,self.nspin, self.nc, dtype=self.dtype)
-
 
 class StaggeredField(Field):
     """ notice: I believe this assume GAMMA['fermilab'] """
@@ -2098,6 +2116,31 @@ class TestInverters(unittest.TestCase):
                 print 'fermi.%s.%s.real.vtk' % (spin,i)
                 phi.data_component((spin,i))\
                     .save('fermi.%s.%s.real.vtk' % (spin,i))
+
+    def test_meson_propagator(self):
+        N, nspin, nc = 9, 4, 3
+        r = 1.0
+        kappa = 0.1234
+        I = identity(4)
+        gamma = GAMMA['fermilab']
+
+        comm = Communicator()
+        space = comm.Lattice([N,N,N,N])
+        U = space.GaugeField(nc)
+        phi = space.FermiField(nspin,nc)
+        U.set_cold()
+        Dslash = FermiOperator(U)
+        Dslash.add_wilson4d_action(kappa)
+        meson = space.ComplexScalarField()
+        for spin in range(4):
+            for color in range(3):
+                psi = space.FermiField(nspin,nc)
+                psi[(0,0,0,0),spin,color] = 1.0
+                phi.set(invert_bicgstab,Dslash,psi)
+                meson += phi.contract(phi)
+        meson_fft = meson.fft()
+        meson_prop = [(t,meson_fft[t,0,0,0].real) for t in range(N)]
+        Canvas().plot(meson_prop).save('meson.prop.png')
 
 
 class TestSmearing(unittest.TestCase):
