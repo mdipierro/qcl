@@ -734,13 +734,20 @@ class Field(object):
     def set(self,operator,*args,**kwargs):
         return operator(self,*args,**kwargs)
 
-    def contract(self,other):
-        if self.data.shape != other.data.shape:
-            raise RuntimeError("Cannot be contracted")
-        result = self.lattice.Field((1,))
-        for k in range(self.lattice.size):
-            result.data[k] = numpy.vdot(self.data[k],other.data[k])
-        return result
+def make_meson(left,right):
+    if left.data.shape != right.data.shape:
+        raise RuntimeError("Cannot be contracted")
+    result = left.lattice.Field((1,))
+    for k in range(left.lattice.size):
+        result.data[k] = numpy.vdot(left.data[k],right.data[k])
+    return result
+
+def make_baryon(left,middle,right):
+    if left.data.shape != middle.data.shape or middle.data.shape != right.data.shape:
+        raise RuntimeError("Cannot be contracted")
+    result = left.lattice.clone()
+    raise NotImplementedError
+    return result
 
 class ComplexScalarField(Field):
     def __init__(self, lattice, dtype=numpy.complex64):
@@ -2137,9 +2144,9 @@ class TestInverters(unittest.TestCase):
                 psi = space.FermiField(nspin,nc)
                 psi[(0,0,0,0),spin,color] = 1.0
                 phi.set(invert_bicgstab,Dslash,psi)
-                meson += phi.contract(phi)
+                meson += make_meson(phi,phi)
         meson_fft = meson.fft()
-        meson_prop = [(t,meson_fft[t,0,0,0].real) for t in range(N)]
+        meson_prop = [(t,math.log(meson_fft[t,0,0,0].real)) for t in range(N)]
         Canvas().plot(meson_prop).save('meson.prop.png')
 
 
