@@ -366,27 +366,7 @@ kernel void fermi_operator(global cfloat_t *phi,
   cfloat_t path[MAXN*MAXN];
   cfloat_t spinor[MAXN*MAXN];
   cfloat_t coeff;
+  double coeff2;
 
   //[inject:fermi_operator]
-}
-
-
-kernel void staggered_operator(global cfloat_t *phi,
-                               global cfloat_t *U,
-                               global cfloat_t *psi,
-                               struct bbox_t bbox
-                               //[inject:extra_fields]
-                               ) {
-
-  size_t gid = get_global_id(0);
-  size_t idx = gid2idx(gid,&bbox);
-  size_t idx2;
-  global cfloat_t *p;
-  global cfloat_t *q;
-  struct shift_t delta;
-  cfloat_t path[MAXN*MAXN];
-  cfloat_t spinor[MAXN];
-  double coeff;
-
-  //[inject:staggered_operator]
 }

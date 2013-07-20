@@ -1020,9 +1020,11 @@ class FermiOperator(object):
         self.extra = range(len(extra_fields or []))
 
     def add_diagonal_term(self,gamma):
-        return self.add_term(gamma, paths=None)
+        return self.add_term(gamma)
 
-    def add_term(self, gamma, paths):
+    def add_term(self, gamma, 
+                 paths=None, shift=None, 
+                 color=None, staggered=False):
         """
         gamma is a NspinxNspin Gamma matrix for Wilson fermions
         gamma is (coefficient, mu) for staggered (mu = 1,2,3 or 4)
@@ -1038,33 +1040,42 @@ class FermiOperator(object):
         >>> wilson = FermiOperator(U).add_term(
             c_sw,gamma[0]*gamma[1],path = self.extra[0])
         """
+        if shift is None and is_multiple_paths(paths):
+            shift = [0]*self.lattice.d
+            for step in paths[0]:
+                shift[abs(step) % self.lattice.d] += 1 if step>0 else -1
+        term = dict(gamma=gamma,paths=paths,shift=shift,
+                    staggered=staggered,color=color)
         if paths is None: # diagonal term in operator
-            if self.terms and self.terms[0][1] is None:
+            if self.terms and self.terms[0]['gamma'] is None:
                 raise RuntimeError("cannot have two terms without paths")
-            self.terms.insert(0,(gamma,paths))
+            self.terms.insert(0,term)                                     
         elif (isinstance(paths,numpy.matrix) or
               is_multiple_paths(paths) or
               (isinstance(paths,int) and paths in self.extra)):
-            self.terms.append((gamma,paths))
+            self.terms.append(term)
         else:
             raise RuntimeError("invalid Path")
         return self
 
+    def add_staggered_term(self, gamma, paths, shift=None, color=None):
+        self.add_term(gamma,paths,shift,color,staggered=True)
+        
     # action specific helper functions
-    def add_staggered_terms(self,kappa=1.0):
+    def add_staggered_action(self,kappa=1.0):
         self.add_diagonal_term(1.0)
         for mu in range(1,self.lattice.d+1):
-            self.add_term((kappa, mu), [(+mu,)])
-            self.add_term((kappa, mu), [(-mu,)])
+            self.add_staggered_term(kappa, [(+mu,)])
+            self.add_staggered_term(kappa, [(-mu,)])
         return self
 
     def add_staggered_nhop_terms(self,kappa=1.0, nhop=3):
         for mu in range(1,self.lattice.d+1):
-            self.add_term((kappa, mu), [[+mu]*nhop])
-            self.add_term((kappa, mu), [[-mu]*nhop])
+            self.add_staggered_term(kappa, [[+mu]*nhop])
+            self.add_staggered_term(kappa, [[-mu]*nhop])
         return self
 
-    def add_wilson4d_terms(self,
+    def add_wilson4d_action(self,
                            kappa=1.0,kappa_t=1.0,kappa_s=1.0,
                            r=1.0,r_t=1.0,r_s=1.0,
                            gamma=GAMMA['fermilab']):
@@ -1081,14 +1092,14 @@ class FermiOperator(object):
                            gamma=GAMMA['fermilab']):
         clover = self.U.clover()
         n = len(self.extra_fields)
-        self.extra_fields += self.U.clover()
-        self.extra = range(len(self.extra_fields))
-        self.add_term(-2.0*c_SW*c_E*gamma[4]*gamma[1],n+0) # Ex
-        self.add_term(-2.0*c_SW*c_E*gamma[4]*gamma[2],n+1) # Ey
-        self.add_term(-2.0*c_SW*c_E*gamma[4]*gamma[3],n+2) # Ez
-        self.add_term(-2.0*c_SW*c_B*gamma[1]*gamma[2],n+3) # Bx
-        self.add_term(-2.0*c_SW*c_B*gamma[1]*gamma[3],n+4) # By
-        self.add_term(-2.0*c_SW*c_B*gamma[2]*gamma[3],n+5) # Bz
+        extra = self.U.clover()
+        self.extra_fields += extra
+        self.add_term(-2.0*c_SW*c_E*gamma[4]*gamma[1],color=extra[0]) # Ex
+        self.add_term(-2.0*c_SW*c_E*gamma[4]*gamma[2],color=extra[1]) # Ey
+        self.add_term(-2.0*c_SW*c_E*gamma[4]*gamma[3],color=extra[2]) # Ez
+        self.add_term(-2.0*c_SW*c_B*gamma[1]*gamma[2],color=extra[3]) # Bx
+        self.add_term(-2.0*c_SW*c_B*gamma[1]*gamma[3],color=extra[4]) # By
+        self.add_term(-2.0*c_SW*c_B*gamma[2]*gamma[3],color=extra[5]) # Bz
         return self
 
     # end action specific helper functions
@@ -1124,21 +1135,20 @@ class FermiOperator(object):
             raise RuntimeError
         nc = shapeu[2]
         k=0
-        for gamma, opaths in self.terms:
-            if isinstance(opaths,list):
+        for term in self.terms:
+            if is_multiple_paths(term['paths']):
                 code += opencl_paths(function_name = name+str(k),
                                      lattice = self.lattice,
-                                     coefficients=[1.0]*len(opaths),
-                                     paths=opaths,
+                                     coefficients=[1.0]*len(term['paths']),
+                                     paths=term['paths'],
                                      nc = nc,
                                      initialize = True,
                                      trace = False)
             k += 1
         action = opencl_fermi_operator(self.terms,U.d,nspin,nc,name)
-        extra_fields_def = ''.join(',global cfloat_t *extra%i' % i
-                                   for i in range(len(extra_fields))
-                                   ) if extra_fields else ''
-        key = 'fermi_operator' if nspin>1 else 'staggered_operator'
+        extra_fields_def = ''.join(',global cfloat_t *extra%i' % id(e)
+                                   for e in extra_fields) if extra_fields else ''
+        key = 'fermi_operator'
         source = makesource({'paths':code, key:action,
                              'extra_fields': extra_fields_def})
         def runner(source,self=self,phi=phi,U=U,psi=psi):
@@ -1148,10 +1158,7 @@ class FermiOperator(object):
             extra_buffers = [e.buffer('r') for e in extra_fields]
             psi_buffer = psi.buffer('r')
             prg = U.lattice.comm.compile(source)
-            if nspin>1:
-                meta_event = prg.fermi_operator
-            else:
-                meta_event = prg.staggered_operator
+            meta_event = prg.fermi_operator
             event = meta_event(U.lattice.comm.queue,
                                (U.lattice.size,),None,
                                phi_buffer,
@@ -1678,53 +1685,55 @@ def opencl_fermi_operator(terms,d,nspin,nc,name='aux'):
     h = 0
     code.append('q = phi + idx*%s;' % (nspin*nc)) #OUT
     k = 0
-    for gamma, opaths in terms:
-        is_color_diagonal = (opaths==None)
-        is_extra = isinstance(opaths,int) # for example clover
-        is_color_matrix = isinstance(opaths, numpy.matrix)
-        is_spin_matrix = isinstance(gamma, numpy.matrix)
+    for term in terms:        
+        gamma = term['gamma']
+        opaths = term['paths']
+        color = term['color']
+        shift = term['shift']
         is_spin_constant = isinstance(gamma,(int,float,complex))
-        is_staggered = isinstance(gamma, tuple)
-        is_shift = isinstance(opaths,(list,tuple)) or is_staggered
-        if is_color_diagonal or is_color_matrix or is_extra:
+        is_spin_matrix = isinstance(gamma, numpy.matrix)
+        is_staggered = term['staggered'] and shift
+        is_color_matrix = isinstance(color, numpy.matrix)
+        is_extra = isinstance(color, Field)
+        is_color_diagonal = (opaths is None and color is None)
+        is_shift = shift is not None
+        if is_shift and color is not None:
+            raise RuntimeError("Not supported yet: %s" % term)
+        if shift is None:
             code.append('p = psi + idx*%s;' % (nspin*nc)) #IN
-        elif is_shift:
-            path = opaths[0]
-            site = [0]*d
-            for step in opaths[0]: site[abs(step) % d] += 1 if step>0 else -1
-            for i in range(d): code.append('delta.s[%s] = %s;' % (i, site[i]))
-            code.append('p = psi+idx2idx_shift(idx,delta,&bbox)*%s;' % (nspin*nc)) 
         else:
-            raise RuntimeError("Invalid term")
+            for i in range(d): code.append('delta.s[%s] = %s;' % (i, shift[i]))
+            code.append('p = psi+idx2idx_shift(idx,delta,&bbox)*%s;' % (
+                    nspin*nc)) 
         # deal with gamma structure
-        if is_spin_constant:
+        if is_staggered:
+            mu = [i for i,dmu in enumerate(shift) if dmu!=0][0]
+            code.append('coeff2 = %s * idx2eta(idx,%s,&bbox);' % (gamma,mu))
+            lines =  mul_real_coeff('spinor','coeff2','p',nspin*nc)
+            checks = None
+        elif is_spin_constant:
             lines = mul_const('spinor',gamma,'p',nspin*nc)
             checks = None
         elif is_spin_matrix:
             lines,checks = mul_spin_matrix('spinor',gamma,'p',nc)
-        elif is_staggered:
-            (coeff, mu) = gamma
-            code.append('coeff = %s * idx2eta(idx,%s,&bbox);' % (coeff,mu%d))
-            lines =  mul_real_coeff('spinor','coeff','p',nspin*nc)
-            checks = None
         else:
-            raise RuntimeError("Not supported term")
+            raise RuntimeError("Not supported term %s" % term)
         code += lines
         # deal with color
-        if is_color_matrix:
-            code += mul_color_matrix('q', opaths, 'spinor', nspin, 
-                                     add=k>0, checks=checks)
-        elif is_shift:
+        if is_shift:
             code.append("%s%s(path,U,idx,&bbox);" % (name,k))
             code += mul_link('q', 'path', 'spinor', nspin, nc,
                              add=k>0, checks=checks)
+        elif is_color_matrix:
+            code += mul_color_matrix('q', opaths, 'spinor', nspin, 
+                                     add=k>0, checks=checks)
         elif is_extra:
-            code += mul_link('q', 'extra%s' % opaths, 'spinor', nspin, nc,
+            code += mul_link('q', 'extra%s' % id(color), 'spinor', nspin, nc,
                              add=k>0, checks=checks)
         elif is_color_diagonal:
             code += mul_const('q',1.0,'spinor', nspin*nc, add=k>0)
         else:
-            raise RuntimeError("Not supported term %s" % ((gamma,opaths),))
+            raise RuntimeError("Not supported term %s" % term)
         k+=1
     return '\n'.join(' '*10+line for line in code)
 
@@ -1946,7 +1955,7 @@ class TestFermions(unittest.TestCase):
         U.set_cold()
         psi[(0,0,N/2,N/2),0,0] = 100.0
         Dslash = FermiOperator(U)
-        Dslash.add_term(1.0, None)
+        Dslash.add_term(1.0)
         for mu in (1,2,3,4):
             Dslash.add_term(kappa*(r*I-gamma[mu]), [(mu,)])
             Dslash.add_term(kappa*(r*I+gamma[mu]), [(-mu,)])
@@ -1974,7 +1983,7 @@ class TestFermions(unittest.TestCase):
 
         U.set_cold()
         psi[(0,0,0,0),0,0] = 100.0
-        Dslash1 = FermiOperator(U).add_wilson4d_terms(kappa)
+        Dslash1 = FermiOperator(U).add_wilson4d_action(kappa)
         Dslash2 = FermiOperator(U)
         Dslash2.add_term(1.0, None)
         for mu in (1,2,3,4):
@@ -2001,7 +2010,7 @@ class TestFermions(unittest.TestCase):
         U.set_cold()
         psi[(0,0,0,0),0,0] = 100.0
         Dslash = FermiOperator(U)\
-            .add_wilson4d_terms(kappa)\
+            .add_wilson4d_action(kappa)\
             .add_clover4d_terms(csw)
         phi.set(Dslash,psi)
 
@@ -2019,7 +2028,7 @@ class TestFermions(unittest.TestCase):
 
         U.set_cold()
         psi[(0,0,N/2,N/2),0] = 100.0
-        Dslash = FermiOperator(U).add_staggered_terms(kappa)
+        Dslash = FermiOperator(U).add_staggered_action(kappa)
         for k in range(10):
             phi.set(Dslash,psi)
             # project color=0 component, plane passing fox t=0,x=0
@@ -2143,7 +2152,7 @@ def test():
         psi[(0,0,4,4),0,0] = 100.0
         if True:
             Dslash = FermiOperator(U)
-            Dslash.add_wilson4d_terms(kappa)
+            Dslash.add_wilson4d_action(kappa)
             Dslash.add_clover4d_terms(c_SW)
             phi.set(Dslash, psi)
 
