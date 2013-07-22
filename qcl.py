@@ -714,11 +714,10 @@ class Field(object):
                             nc = U.data.shape[-1],
                             trace = (self.data.shape[-1]==1))
         source = makesource({'paths':code})
-        def runner(source,self=self,name=name):
+        def runner(prg,self=self,name=name):
             shape = self.siteshape
             out_buffer = self.buffer('w')
             U_buffer = U.buffer('r')
-            prg = self.lattice.comm.compile(source)
             function = getattr(prg,name+'_loop')
             function(self.lattice.comm.queue,(self.lattice.size,),None,
                      out_buffer, U_buffer,
@@ -726,7 +725,7 @@ class Field(object):
                      self.lattice.bbox).wait()
             cl.enqueue_copy(self.lattice.comm.queue, self.data, out_buffer).wait()
             return self
-        return Code(source,runner)
+        return Code(source,runner,compiler=self.lattice.comm.compile)
 
     def set_link_product(self,U,paths,name='aux'):
         return self.compute_link_product(U,paths,name).run()
@@ -734,20 +733,113 @@ class Field(object):
     def set(self,operator,*args,**kwargs):
         return operator(self,*args,**kwargs)
 
-def make_meson(left,right):
+    def make_hadron(self,contractions,quarks):
+        """
+        example: rho(alpha,a) = eps(a,b,c) * q1(alpha,a)*q2(beta,b)*q3(beta,c)
+        rho = lattice.FermiField(4,3)
+        q1 = lattice.FermiField(4,3)
+        q2 = lattice.FermiField(4,3)
+        q3 = lattice.FermiField(4,3)
+        spin = 0
+        contractions = [spin*3+0, +1, (0,1,2), (spin,0,0)]
+        contractions = [spin*3+1, +1, (1,2,0), (spin,0,0)]
+        contractions = [spin*3+2, +1, (2,0,1), (spin,0,0)]
+        contractions = [spin*3+0, -1, (0,2,1), (spin,0,0)]
+        contractions = [spin*3+2, -1, (2,1,0), (spin,0,0)]
+        contractions = [spin*3+1, -1, (1,0,2), (spin,0,0)]
+        rho.make_hadron(contractions,(q1,q2,q3))
+        """
+        quark = quarks[0]
+        if (self.lattice!=quark.lattice or 
+            any(quark.data.shape != other.data.shape for other in quarks[1:]) or 
+            not all(isinstance(q,FermiField) for q in quarks)):        
+            raise RuntimeError("incomplatible arguments")
+        nspin, nc = quark.nspin, quark.nc
+        quarks_def = ''.join(',global cfloat_t *quark%i' % i
+                                   for i in range(len(quarks)))
+        code = []
+        for i in range(len(quarks)):
+            code.append('global cfloat_t *q%i;' % i)
+        code.append('ix = rho + idx*%i;' % (self.sitesize))
+        code.append('for(k=0; k<%i; k++) ix[k].x = ix[k].y = 0.0;' % self.sitesize)
+
+        for i in range(len(quarks)):
+            code.append('q%i = quark%i + idx*%i;' % (i,i,nspin*nc))
+        for c,contraction in enumerate(contractions):
+            comp, coeff, spin_idx, color_idx = contraction
+            if coeff:
+                i = spin_idx[0]*nc + color_idx[0]
+                j = spin_idx[1]*nc + color_idx[1]
+                code.append('tmp.x = q0[%i].x*q1[%i].x - q0[%i].y*q1[%i].y;' % (
+                        i,j,i,j))
+                code.append('tmp.y = q0[%i].x*q1[%i].y + q0[%i].y*q1[%i].x;' % (
+                        i,j,i,j))
+                for k in range(2,len(spin_idx)):
+                    j = spin_idx[k]*nc + color_idx[k]
+                    code.append('tmp.x = tmp.x*q%i[%i].x - tmp.y*q%i[%i].y;' % (
+                            k,j,k,j))
+                    code.append('tmp.y = tmp.x*q%i[%i].y + tmp.y*q%i[%i].x;' % (
+                            k,j,k,j))
+                code.append('ix[%i].x += (%s) * tmp.x - (%s) * tmp.y;' % (
+                        comp, coeff.real, coeff.imag))
+                code.append('ix[%i].y += (%s) * tmp.y + (%s) * tmp.x;' % (
+                        comp, coeff.real, coeff.imag))
+        code = '\n'.join(' '*12+line for line in code)
+        source = makesource({'make_hadron':code,'quarks':quarks_def})
+        def runner(prg,self=self,quarks=quarks):
+            data_buffer = self.buffer('w')
+            event = prg.make_hadron(self.lattice.comm.queue,
+                                    (self.lattice.size,),None,
+                                    data_buffer,
+                                    self.lattice.bbox,
+                                    *[q.buffer('r') for q in quarks])
+            if DEBUG:
+                print 'waiting'
+            event.wait()
+            cl.enqueue_copy(self.lattice.comm.queue, self.data, data_buffer).wait()
+            return self
+        return Code(source,runner,compiler=self.lattice.comm.compile)
+
+    def set_hadron(self,contractions,quarks):
+        return self.make_hadron(contractions,quarks).run()
+
+def cyclic(n):
+    permutations = []
+    a = range(n)
+    for k in range(n):
+        permutations.append((+1,[x for x in a]))
+        a = a[-1:]+a[:-1]
+    a = range(n-1,-1,-1)
+    for k in range(n):
+        permutations.append((-1,[x for x in a]))
+        a = a[-1:]+a[:-1]
+    return permutations
+
+def make_meson(left,gamma,right):
     if left.data.shape != right.data.shape:
         raise RuntimeError("Cannot be contracted")
-    result = left.lattice.Field((1,))
-    for k in range(left.lattice.size):
-        result.data[k] = numpy.vdot(left.data[k],right.data[k])
-    return result
+    rho = left.lattice.Field((1,))
+    contractions = [(0,gamma[a,b],(i,i),(a,b)) 
+                    for i in range(left.nc) 
+                    for a in range(left.nspin)
+                    for b in range(left.nspin) 
+                    if gamma[a,b]]
+    rho.set_hadron(contractions,(left,right))
+    return rho
 
-def make_baryon(left,middle,right):
-    if left.data.shape != middle.data.shape or middle.data.shape != right.data.shape:
-        raise RuntimeError("Cannot be contracted")
-    result = left.lattice.clone()
-    raise NotImplementedError
-    return result
+def make_baryon3(left,middle,gamma,right):
+    print gamma
+    rho = left.lattice.Field((left.nspin))
+    perms = cyclic(3)
+    contractions = []
+    for alpha in range(0,left.nspin):
+        for beta in range(0,left.nspin):
+            for kappa in range(0,left.nspin):
+                for sign, perm in perms:
+                    coeff = sign*gamma[beta,kappa]
+                    if coeff:
+                        contractions.append((alpha,coeff,perm,(alpha,beta,kappa)))
+    rho.set_hadron(contractions,(left,middle,right))
 
 class ComplexScalarField(Field):
     def __init__(self, lattice, dtype=numpy.complex64):
@@ -885,6 +977,7 @@ class StaggeredField(Field):
     def __init__(self, lattice, nc, dtype=numpy.complex64):
         Field.__init__(self, lattice, (nc,), dtype=dtype)
         self.nc = nc
+        self.nspin = 1
 
     def clone(self):
         return StaggeredField(self.lattice, self.nc, dtype=self.dtype)
@@ -945,14 +1038,13 @@ class GaugeAction(object):
         action = '\n'.join('if(mu==%i) %s%i(staples,U,idx,&bbox);' %
                            (i,name,i) for i in range(U.d))
         source = makesource({'paths':code,'heatbath_action':action})
-        def runner(source,self=self,beta=beta,n_iter=n_iter,m_iter=m_iter,
+        def runner(prg,self=self,beta=beta,n_iter=n_iter,m_iter=m_iter,
                    displacement=displacement):
             U = self.U
             lattice = U.lattice
             shape = U.siteshape
             if not (len(shape)==3 and shape[1]==shape[2]): raise RuntimeError
-            data_buffer = U.buffer('rw')
-            prg = lattice.comm.compile(source)
+            data_buffer = U.buffer('rw')            
             for size, x in self.lattice.bbox_range(displacement):
                 if DEBUG:
                     print 'displacement: %s, size:%s, slice:%s' % (
@@ -972,7 +1064,7 @@ class GaugeAction(object):
                 event.wait()
             cl.enqueue_copy(lattice.comm.queue, U.data, data_buffer).wait()
             return self
-        return Code(source,runner)
+        return Code(source,runner,compiler=self.lattice.comm.compile)
 
 class GaugeSmearOperator(GaugeAction):
     def heathbath(self):
@@ -1008,14 +1100,13 @@ class GaugeSmearOperator(GaugeAction):
         action = '\n'.join('if(mu==%i) %s%i(staples,U,idx,&bbox);' %
                            (i,name,i) for i in range(U.d))
         source = makesource({'paths':code,'smear_links':action})
-        def runner(source,self=self,V=V):
+        def runner(prg,self=self,V=V):
             U = self.U
             lattice  = U.lattice
             shape = U.siteshape
             if not (len(shape)==3 and shape[1]==shape[2]): raise RuntimeError
             data_buffer_V = V.buffer('w')
-            data_buffer_U = U.buffer('r')
-            prg = U.lattice.comm.compile(source)
+            data_buffer_U = U.buffer('r')            
             event = prg.smear_links(
                 lattice.comm.queue,
                 (lattice.size,),None,
@@ -1029,7 +1120,7 @@ class GaugeSmearOperator(GaugeAction):
             event.wait()
             cl.enqueue_copy(lattice.comm.queue, V.data, data_buffer_V).wait()
             return self
-        return Code(source,runner)
+        return Code(source,runner,compiler=self.lattice.comm.compile)
 
 
 class FermiOperator(object):
@@ -1176,13 +1267,12 @@ class FermiOperator(object):
         key = 'fermi_operator'
         source = makesource({'paths':code, key:action,
                              'extra_fields': extra_fields_def})
-        def runner(source,self=self,phi=phi,U=U,psi=psi):
+        def runner(prg,self=self,phi=phi,U=U,psi=psi):
 
             phi_buffer = phi.buffer('rw')
             U_buffer = U.buffer('r')
             extra_buffers = [e.buffer('r') for e in extra_fields]
             psi_buffer = psi.buffer('r')
-            prg = U.lattice.comm.compile(source)
             meta_event = prg.fermi_operator
             event = meta_event(U.lattice.comm.queue,
                                (U.lattice.size,),None,
@@ -1196,7 +1286,7 @@ class FermiOperator(object):
             event.wait()
             cl.enqueue_copy(U.lattice.comm.queue, phi.data, phi_buffer).wait()
             return self
-        return Code(source,runner)
+        return Code(source,runner,compiler=self.lattice.comm.compile)
 
 
 # ###########################################################
@@ -1358,12 +1448,18 @@ def minimum_spanning_graph(paths,bidirectional=True):
 # ###########################################################
 
 class Code(object):
-    def __init__(self,source,runner):
+    def __init__(self,source,runner,compiler):
         self.source = source
         self.runner = runner
-    def run(self,*args,**kwargs):
-        open('latest.c','w').write(self.source)
-        return self.runner(self.source,*args,**kwargs)
+        self.compiler = compiler
+        self.program = None
+        open('latest.c','w').write(source)
+    def compile(self):
+        self.program = self.compiler(self.source)
+    def run(self,*args,**kwargs):        
+        if not self.program:
+            self.compile()
+        return self.runner(self.program,*args,**kwargs)
 
 def mul_const(name1,coeff,name2,m,add=False):
     lines = []
@@ -2182,29 +2278,39 @@ class TestSmearing(unittest.TestCase):
             Canvas().imshow(chi).save('smear.%.2i.png' % k)
             os.system('convert smear.%.2i.png smear.%.2i.jpg' % (k,k))
 
+def test_hadrons():
+    N = 8
+    comm = Communicator()
+    lattice = comm.Lattice((N,N,N,N))
+    q1 = lattice.FermiField(4,3)
+    q2 = lattice.FermiField(4,3)
+    q3 = lattice.FermiField(4,3)
+    rho = make_meson(q1,identity(4),q2)
+    rho = make_baryon3(q1,q2,identity(4),q3)
+
 def test():
-        N, nspin, nc = 9, 4, 3
-        r = 1.0
-        kappa = 0.1234
-        c_SW = 0.5
+    N, nspin, nc = 9, 4, 3
+    r = 1.0
+    kappa = 0.1234
+    c_SW = 0.5
+    
+    I = identity(4)
+    gamma = GAMMA['fermilab']
+    
+    comm = Communicator()
+    space = comm.Lattice([N,N,N,N])
+    U = space.GaugeField(nc)
+    psi = space.FermiField(nspin,nc)
+    phi = space.FermiField(nspin,nc)
+    
+    U.set_cold()
 
-        I = identity(4)
-        gamma = GAMMA['fermilab']
-
-        comm = Communicator()
-        space = comm.Lattice([N,N,N,N])
-        U = space.GaugeField(nc)
-        psi = space.FermiField(nspin,nc)
-        phi = space.FermiField(nspin,nc)
-
-        U.set_cold()
-
-        psi[(0,0,4,4),0,0] = 100.0
-        if True:
-            Dslash = FermiOperator(U)
-            Dslash.add_wilson4d_action(kappa)
-            Dslash.add_clover4d_terms(c_SW)
-            phi.set(Dslash, psi)
+    psi[(0,0,4,4),0,0] = 100.0
+    if True:
+        Dslash = FermiOperator(U)
+        Dslash.add_wilson4d_action(kappa)
+        Dslash.add_clover4d_terms(c_SW)
+        phi.set(Dslash, psi)
 
 if __name__=='__main__':
     # python -m unittest test_module.TestClass.test_method

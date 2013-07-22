@@ -351,32 +351,43 @@ kernel void smear_links(global cfloat_t *V,
 
 
 kernel void make_meson(global cfloat_t *chi,
-			 global cfloat_t *phi,
-			 global cfloat_t *psi,
-			 struct bbox_t bbox) {
+		       global cfloat_t *phi,
+		       global cfloat_t *psi,
+		       struct bbox_t bbox) {
   size_t gid = get_global_id(0);
   size_t idx = gid2idx(gid,&bbox);
   global cfloat_t *p;
   global cfloat_t *q;
   global cfloat_t *s;
-
+  size_t idx2;
+  int nc = 0;
+  int nspin = 0;
+  int alpha, i;
   //[inject:make_meson]
+  p = chi+idx*nspin*nc;
+  q = phi+idx*nspin*nc;
+  s = psi+idx*nspin*nc;
+  (*p).x = (*p).y = 0;
+  for(alpha = 0; alpha<nspin; alpha++) 
+    for(i=0; i<nc; i++) {
+      idx2 = alpha*nc+i;
+      (*p).x += q[idx2].x+s[idx2].x+q[idx].y*s[idx2].y;
+      (*p).y += q[idx2].x+s[idx2].y-q[idx].y*s[idx2].x;
+    }
 }
 
-kernel void make_baryon(global cfloat_t *rho,
-			global cfloat_t *chi,
-			global cfloat_t *phi,
-			global cfloat_t *psi,
-			struct bbox_t bbox) {
+kernel void make_hadron(global cfloat_t *rho,
+			struct bbox_t bbox
+			//[inject:quarks]
+			) {
   size_t gid = get_global_id(0);
-  size_t idx = gid2idx(gid,&bbox);
-  global cfloat_t *p;
-  global cfloat_t *q;
-  global cfloat_t *s;
-  global cfloat_t *t;
-
-  //[inject:make_baryon]
+  size_t idx = gid2idx(gid,&bbox);  
+  int k;
+  cfloat_t tmp;
+  global cfloat_t *ix;
+  //[inject:make_hadron]
 }
+
 
 kernel void fermi_operator(global cfloat_t *phi,
                            global cfloat_t *U,
