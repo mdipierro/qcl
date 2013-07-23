@@ -900,8 +900,42 @@ class GaugeField(Field):
                     self.lattice.bbox,self.lattice.prngstate_buffer).wait()
         cl.enqueue_copy(self.lattice.comm.queue, self.data, data_buffer).wait()
 
-    def set_smeared(self,smear_operator):
-        smear_operator.smear_to(self).run()
+    def set_smeared(self,smear_operator,reunitarize=0):        
+        smear_operator.smear_to(self,reunitarize).run()
+
+    def set_hisq(self,U):
+        W = clone(U)
+        W.set_fat(U,'fat5',reunitarize=True)
+        self.set_fat(W,'fat7+lepage')
+
+    def set_fat(self,U,name,plaquette=1.0,reunitarize=0):
+        smear_operator = GaugeSmearOperator(U)
+        u0 = (plaquette.real)**(0.25)
+        if n=='link':
+            c = [1.0,0,0,0,0]
+        elif n=='fat3':
+            c = [9.0/32,9.0/(64*u0**2),0,0,0] # attention this assume Naik term -9.0/(8*27);
+        elif n=='fat5':
+            c = [1.0/7,1.0/(7*2*u0**2),1.0/(7*8*u0**4),0,0]
+        elif n=='fat7':
+            c = [1.0/8,1.0/(8*2*u0**2),1.0/(8*8*u0**4),1.0/(8*48*u0**6),0]
+        elif n=='fat7+lepage':
+            c = [5.0/8,1.0/(8*2*u0**2),1.0/(8*8*u0**4),1.0/(8*48*u0**6),-1.0/(16.0*u0**2)] # attention this assume Naik term -1.0/24.0*pow(u0,-2);
+        else:
+            raise NotImplementedError
+        smear_operator.add_term([1],c[0])
+        if c[1]: smear_operator.add_term([2,1,-2],c[1])
+        if c[2]: smear_operator.add_term([3,2,1,-2,3],c[2])
+        if c[3]: smear_operator.add_term([4,3,2,1,-2,-3,-4],c[3])
+        if c[4]:
+            lepage_term = []
+            for mu in range(1,len(self.d+1)):
+                for nu in range(1,len(self.d+1)):
+                    if nu!=mu:
+                        lepage_term.append((-nu,-nu,mu,+nu,+nu))
+                        lepage_term.append((+nu,+nu,mu,-nu,-nu))
+            smear_operator.add_term(lepage_term)
+        smear_operator.smear_to(self,reunitarize).run()
 
     def check_unitarity(self,output=DEBUG):
         """
@@ -1070,7 +1104,7 @@ class GaugeSmearOperator(GaugeAction):
     def heathbath(self):
         raise NotImplementedError
 
-    def smear_to(self,V,name='aux'):
+    def smear_to(self,V,reunitarize=0,name='aux'):
         """
         Generates a kernel which performs the SU(n) heatbath.
         Example:
@@ -1100,7 +1134,7 @@ class GaugeSmearOperator(GaugeAction):
         action = '\n'.join('if(mu==%i) %s%i(staples,U,idx,&bbox);' %
                            (i,name,i) for i in range(U.d))
         source = makesource({'paths':code,'smear_links':action})
-        def runner(prg,self=self,V=V):
+        def runner(prg,self=self,V=V,reunitarize=reunitarize):
             U = self.U
             lattice  = U.lattice
             shape = U.siteshape
@@ -1114,6 +1148,7 @@ class GaugeSmearOperator(GaugeAction):
                 data_buffer_U,
                 numpy.int32(shape[0]),
                 numpy.int32(shape[1]),
+                numpy.int32(reunitarize),
                 lattice.bbox)
             if DEBUG:
                 print 'waiting'
@@ -2240,7 +2275,7 @@ class TestInverters(unittest.TestCase):
                 psi = space.FermiField(nspin,nc)
                 psi[(0,0,0,0),spin,color] = 1.0
                 phi.set(invert_bicgstab,Dslash,psi)
-                meson += make_meson(phi,phi)
+                meson += make_meson(phi,identity(4),phi)
         meson_fft = meson.fft()
         meson_prop = [(t,math.log(meson_fft[t,0,0,0].real)) for t in range(N)]
         Canvas().plot(meson_prop).save('meson.prop.png')

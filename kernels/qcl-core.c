@@ -264,6 +264,100 @@ void heatbath_SU2(cfloat_t *a,
   a[3]=cfloat_add(cfloat_mul(v2,u1),cfloat_mul(v3,u3));
 }
 
+void project_SU(cfloat_t *M, int nc, int nsteps) {
+  int i,j,k,l,step;
+  double e0,e1,e2,e3,dk,d;
+  cfloat_t dc,u0,u1,u2,u3;
+  cfloat_t B[MAXN*MAXN];
+  cfloat_t C[MAXN*MAXN];
+  cfloat_t S[MAXN*MAXN];
+  for(k=0; k<nc*nc; k++) {
+    B[k].x = B[k].y = 0.0;
+    C[k]=M[k];
+  }
+  // preconditioning
+  for(i=0; i<nc; i++) {
+    for(j=0; j<i; j++) {
+      dc.x = dc.y = 0;
+      for(k=0; k<nc; k++) {
+        dc.x += C[k*nc+j].x*C[k*nc+i].x-C[k*nc+j].y*C[k*nc+i].y;
+        dc.y += C[k*nc+j].x*C[k*nc+i].y+C[k*nc+j].y*C[k*nc+i].x;
+      }
+      for(k=0; k<nc; k++) {
+	C[k*nc+i].x -= dc.x*C[k*nc+j].x - dc.y*C[k*nc+j].y;
+	C[k*nc+i].y -= dc.x*C[k*nc+j].y + dc.y*C[k*nc+j].x;
+      }
+    }
+    d = 0.0;
+    for(k=0; k<nc; k++) {
+      d += C[k*nc+i].x*C[k*nc+i].x+C[k*nc+i].y*C[k*nc+i].y;
+    }
+    d=sqrt(d);
+    for(k=0; k<nc; k++) {
+      C[k*nc+i].x/=d;
+      C[k*nc+i].y/=d;
+    }
+  }
+  // Cabibbo Marinari Projection
+  for(i=0; i<nc; i++)
+    for(j=0; j<nc; j++)
+      for(k=0; k<nc; k++) {
+	B[i*nc+j].x += M[k*nc+i].x*C[k*nc+j].x + M[k*nc+i].y*C[k*nc+j].y;
+	B[i*nc+j].y += M[k*nc+i].x*C[k*nc+j].y - M[k*nc+i].y*C[k*nc+j].x;
+      }
+  for(step=0; step<nsteps; step++) {
+    for(i=0; i<nc-1; i++)
+      for(j=i+1; j<nc; j++) {
+        e0=B[i*nc+i].x+B[j*nc+j].x;
+        e1=B[i*nc+j].y+B[j*nc+i].y;
+        e2=B[i*nc+j].x-B[j*nc+i].x;
+        e3=B[i*nc+i].y-B[j*nc+j].y;
+        dk=sqrt(e0*e0+e1*e1+e2*e2+e3*e3);
+	u0.x = e0/dk;
+	u0.y = -e3/dk;
+	u1.x = e2/dk;
+	u1.y = -e1/dk;
+	u2.x = -e2/dk;
+	u2.y = -e1/dk;
+	u3.x = e0/dk;
+	u3.y = e3/dk;
+        // S=C;
+        for(k=0; k<nc; k++) {
+	  S[k*nc+i].x = C[k*nc+i].x * u0.x - C[k*nc+i].y*u0.y +
+                        C[k*nc+j].x * u1.x - C[k*nc+j].y*u1.y;
+	  S[k*nc+i].y = C[k*nc+i].x * u0.y + C[k*nc+i].y*u0.x +
+                        C[k*nc+j].x * u1.y + C[k*nc+j].y*u1.x;
+	  S[k*nc+j].x = C[k*nc+i].x * u2.x - C[k*nc+i].y*u2.y +
+                        C[k*nc+j].x * u3.x - C[k*nc+j].y*u3.y;
+	  S[k*nc+j].y = C[k*nc+i].x * u2.y + C[k*nc+i].y*u2.x +
+                        C[k*nc+j].x * u3.y + C[k*nc+j].y*u3.x;
+        }
+        if((i==nc-2) && (j==nc-1))
+          for(k=0; k<nc; k++)
+            for(l=0; l<nc-2; l++)
+              S[k*nc+l] = C[k*nc+l];
+        if((i!=nc-2) || (j!=nc-1) || (step!=nsteps-1))
+          for(k=0; k<nc; k++) {
+	    C[k*nc+i].x = B[k*nc+i].x * u0.x - B[k*nc+i].y*u0.y +
+	                  B[k*nc+j].x * u1.x - B[k*nc+j].y*u1.y;
+	    C[k*nc+i].y = B[k*nc+i].x * u0.y + B[k*nc+i].y*u0.x +
+	                  B[k*nc+j].x * u1.y + B[k*nc+j].y*u1.x;
+	    C[k*nc+j].x = B[k*nc+i].x * u2.x - B[k*nc+i].y*u2.y +
+	                  B[k*nc+j].x * u3.x - B[k*nc+j].y*u3.y;
+            C[k*nc+j].y = B[k*nc+i].x * u2.y + B[k*nc+i].y*u2.x +
+	                  B[k*nc+j].x * u3.y + B[k*nc+j].y*u3.x;
+	    B[k*nc+i] = C[k*nc+i];
+	    B[k*nc+j] = C[k*nc+j];
+	    C[k*nc+i] = S[k*nc+i];
+	    C[k*nc+j] = S[k*nc+j];
+          }
+      }
+  }
+  for(k=0; k<nc*nc; k++) {
+    M[k] = S[k];
+  }
+}
+
 //[inject:paths]
 
 kernel void heatbath(global cfloat_t *U,
@@ -330,6 +424,7 @@ kernel void smear_links(global cfloat_t *V,
                         global cfloat_t *U,
                         int d,
                         int n,
+			int reunitarize,
                         struct bbox_t bbox) {
   size_t gid = get_global_id(0);
   size_t idx = gid2idx(gid,&bbox);
@@ -345,6 +440,8 @@ kernel void smear_links(global cfloat_t *V,
     // if(mu==1) aux1(V+ixmu,U,idx,&bbox);
     // if(mu==2) aux2(V+ixmu,U,idx,&bbox);
     // if(mu==3) aux3(V+ixmu,U,idx,&bbox);
+    
+    if(reunitarize>0) project_SU(staples,n,reunitarize);
     for(int k=0; k<n*n; k++) V[ixmu+k] = staples[k];
   }
 }
