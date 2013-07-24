@@ -547,6 +547,7 @@ class Field(object):
     def buffer(self, mode):
         """ mode = 'r' or 'w' or 'rw' """
         return self.lattice.comm.buffer(mode, self.data)
+
     def clone(self):
         return Field(self.lattice,self.siteshape,dtype=self.dtype)
 
@@ -905,37 +906,27 @@ class GaugeField(Field):
 
     def set_hisq(self,U):
         W = clone(U)
-        W.set_fat(U,'fat5',reunitarize=True)
+        W.set_fat(U,'fat5',reunitarize=5)
         self.set_fat(W,'fat7+lepage')
 
-    def set_fat(self,U,name,plaquette=1.0,reunitarize=0):
-        smear_operator = GaugeSmearOperator(U)
+    def set_fat(self,U,name='fat3',plaquette=1.0,reunitarize=0,coefficients=None):
         u0 = (plaquette.real)**(0.25)
-        if n=='link':
-            c = [1.0,0,0,0,0]
-        elif n=='fat3':
-            c = [9.0/32,9.0/(64*u0**2),0,0,0] # attention this assume Naik term -9.0/(8*27);
-        elif n=='fat5':
-            c = [1.0/7,1.0/(7*2*u0**2),1.0/(7*8*u0**4),0,0]
-        elif n=='fat7':
-            c = [1.0/8,1.0/(8*2*u0**2),1.0/(8*8*u0**4),1.0/(8*48*u0**6),0]
-        elif n=='fat7+lepage':
-            c = [5.0/8,1.0/(8*2*u0**2),1.0/(8*8*u0**4),1.0/(8*48*u0**6),-1.0/(16.0*u0**2)] # attention this assume Naik term -1.0/24.0*pow(u0,-2);
-        else:
-            raise NotImplementedError
-        smear_operator.add_term([1],c[0])
-        if c[1]: smear_operator.add_term([2,1,-2],c[1])
-        if c[2]: smear_operator.add_term([3,2,1,-2,3],c[2])
-        if c[3]: smear_operator.add_term([4,3,2,1,-2,-3,-4],c[3])
-        if c[4]:
-            lepage_term = []
-            for mu in range(1,len(self.d+1)):
-                for nu in range(1,len(self.d+1)):
-                    if nu!=mu:
-                        lepage_term.append((-nu,-nu,mu,+nu,+nu))
-                        lepage_term.append((+nu,+nu,mu,-nu,-nu))
-            smear_operator.add_term(lepage_term)
-        smear_operator.smear_to(self,reunitarize).run()
+        DATA = {
+            'link':[1.0,0,0,0,0],
+            'fat3':[9.0/32,9.0/(64*u0**2),0,0,0], # attention this assume Naik term -9.0/(8*27);
+            'fat5':[1.0/7,1.0/(7*2*u0**2),1.0/(7*8*u0**4),0,0],
+            'fat7':[1.0/8,1.0/(8*2*u0**2),1.0/(8*8*u0**4),1.0/(8*48*u0**6),0],
+            'fat7+lepage':[5.0/8,1.0/(8*2*u0**2),1.0/(8*8*u0**4),1.0/(8*48*u0**6),-1.0/(16.0*u0**2)], # attention this assume Naik term -1.0/24.0*pow(u0,-2);
+            }
+        c = DATA.get(name,coefficients)
+        if not c: raise NotImplementedError
+        S = GaugeSmearOperator(U)
+        if c[0]: S.add_term([1],c[0])
+        if c[1]: S.add_term([2,1,-2],c[1])
+        if c[2]: S.add_term([3,2,1,-2,3],c[2])
+        if c[3]: S.add_term([4,3,2,1,-2,-3,-4],c[3])
+        if c[4]: S.add_term([2,2,1,-2,-2],c[4])
+        S.smear_to(self,reunitarize).run()
 
     def check_unitarity(self,output=DEBUG):
         """
