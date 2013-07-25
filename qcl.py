@@ -820,7 +820,7 @@ def make_meson(left,gamma,right):
     if left.data.shape != right.data.shape:
         raise RuntimeError("Cannot be contracted")
     rho = left.lattice.Field((1,))
-    contractions = [(0,gamma[a,b],(i,i),(a,b)) 
+    contractions = [(0,gamma[a,b],(a,b),(i,i))
                     for i in range(left.nc) 
                     for a in range(left.nspin)
                     for b in range(left.nspin) 
@@ -836,10 +836,10 @@ def make_baryon3(left,middle,gamma,right):
     for alpha in range(0,left.nspin):
         for beta in range(0,left.nspin):
             for kappa in range(0,left.nspin):
-                for sign, perm in perms:
+                for sign, color_perm in perms:
                     coeff = sign*gamma[beta,kappa]
                     if coeff:
-                        contractions.append((alpha,coeff,perm,(alpha,beta,kappa)))
+                        contractions.append((alpha,coeff,(alpha,beta,kappa),color_perm))
     rho.set_hadron(contractions,(left,middle,right))
 
 class ComplexScalarField(Field):
@@ -1176,11 +1176,11 @@ class FermiOperator(object):
 
         Paths are symmetrized. For example:
         >>> wilson = FermiOperator(U).add_term(
-            kappa,(1-gamma[0]),path = [(4,)])
+            kappa,(1-G[0]),path = [(4,)])
         >>> wilson = FermiOperator(U).add_term(
-            kappa,(1+gamma[0]),path = [(-4,)])
+            kappa,(1+G[0]),path = [(-4,)])
         >>> wilson = FermiOperator(U).add_term(
-            c_sw,gamma[0]*gamma[1],path = self.extra[0])
+            c_sw,G[0]*G[1],path = self.extra[0])
         """
         if shift is None and is_multiple_paths(paths):
             shift = [0]*self.lattice.d
@@ -1967,19 +1967,17 @@ def invert_bicgstab(y,f,x,ap=1e-4,rp=1e-4,ns=200):
 
 class TestColdAndHotGauge(unittest.TestCase):
     def test_cold(self):
-        comm = Communicator()
         for nc in range(2,4):
             for N in range(4,6):
-                space = comm.Lattice([N,N,N,N])
+                space = Q.Lattice([N,N,N,N])
                 U = space.GaugeField(nc)
                 U.set_cold()
                 U.check_unitarity()
                 self.assertTrue(abs(U.average_plaquette()) > 0.9999)
     def test_hot(self):
-        comm = Communicator()
         for nc in range(2,4):
             for N in range(4,6):
-                space = comm.Lattice([N,N,N,N])
+                space = Q.Lattice([N,N,N,N])
                 U = space.GaugeField(nc)
                 U.set_hot()
                 U.check_unitarity()
@@ -1989,8 +1987,7 @@ class TestFieldTypes(unittest.TestCase):
     def test_fields(self):
         N, nc, nspin = 4, 3, 4
         parameters = {}
-        comm = Communicator()
-        space = comm.Lattice([N,N,N,N])
+        space = Q.Lattice([N,N,N,N])
         U = space.GaugeField(nc)
         U.set_hot()
         U.check_unitarity()
@@ -2052,8 +2049,7 @@ class TestPathKernels(unittest.TestCase):
 
     def test_opencl_paths(self):
         N, nc = 4, 3
-        comm = Communicator()
-        space = comm.Lattice([N,N,N,N])
+        space = Q.Lattice([N,N,N,N])
         U = space.GaugeField(nc)
         paths = [(+1,+2,+3,-1,-2,-3)]
         kernel_code = opencl_paths(function_name='staples',
@@ -2062,13 +2058,12 @@ class TestPathKernels(unittest.TestCase):
                                    coefficients = [1.0 for p in paths],
                                    nc=nc,
                                    trace=False)
-        self.make_kernel(comm,kernel_code,'staples',U)
+        self.make_kernel(Q,kernel_code,'staples',U)
 
 class TestHeatbath(unittest.TestCase):
     def test_heatbath(self):
         N, nc = 4, 3
-        comm = Communicator()
-        space = comm.Lattice([N,N,N,N])
+        space = Q.Lattice([N,N,N,N])
         U = space.GaugeField(nc)
         U.set_cold()
         wilson = GaugeAction(U).add_plaquette_terms()
@@ -2090,11 +2085,8 @@ class TestFermions(unittest.TestCase):
         N, nspin, nc = 9, 4, 3
         r = 1.0
         kappa = 0.1234
-        I = identity(4)
-        gamma = GAMMA['fermilab']
 
-        comm = Communicator()
-        space = comm.Lattice([N,N,N,N])
+        space = Q.Lattice([N,N,N,N])
         U = space.GaugeField(nc)
         psi = space.FermiField(nspin,nc)
         phi = space.FermiField(nspin,nc)
@@ -2104,8 +2096,8 @@ class TestFermions(unittest.TestCase):
         Dslash = FermiOperator(U)
         Dslash.add_term(1.0)
         for mu in (1,2,3,4):
-            Dslash.add_term(kappa*(r*I-gamma[mu]), [(mu,)])
-            Dslash.add_term(kappa*(r*I+gamma[mu]), [(-mu,)])
+            Dslash.add_term(kappa*(r*I-G[mu]), [(mu,)])
+            Dslash.add_term(kappa*(r*I+G[mu]), [(-mu,)])
         for k in range(10):
             phi.set(Dslash,psi)
             # project spin=0, color=0 component, plane passing fox t=0,x=0
@@ -2118,11 +2110,7 @@ class TestFermions(unittest.TestCase):
         r = 1.0
         kappa = 0.1234
 
-        I = identity(4)
-        gamma = GAMMA['fermilab']
-
-        comm = Communicator()
-        space = comm.Lattice([N,N,N,N])
+        space = Q.Lattice([N,N,N,N])
         U = space.GaugeField(nc)
         psi = space.FermiField(nspin,nc)
         phi = space.FermiField(nspin,nc)
@@ -2134,8 +2122,8 @@ class TestFermions(unittest.TestCase):
         Dslash2 = FermiOperator(U)
         Dslash2.add_term(1.0, None)
         for mu in (1,2,3,4):
-            Dslash2.add_term(kappa*(r*I-gamma[mu]), [(mu,)])
-            Dslash2.add_term(kappa*(r*I+gamma[mu]), [(-mu,)])
+            Dslash2.add_term(kappa*(r*I-G[mu]), [(mu,)])
+            Dslash2.add_term(kappa*(r*I+G[mu]), [(-mu,)])
         phi.set(Dslash1,psi)
         chi.set(Dslash2,psi)
         self.assertTrue(numpy.linalg.norm((phi.data-chi.data).flat)<1.0e-6)
@@ -2145,11 +2133,8 @@ class TestFermions(unittest.TestCase):
         r = 1.0
         kappa = 0.1234
         csw = 0.5
-        I = identity(4)
-        gamma = GAMMA['fermilab']
 
-        comm = Communicator()
-        space = comm.Lattice([N,N,N,N])
+        space = Q.Lattice([N,N,N,N])
         U = space.GaugeField(nc)
         psi = space.FermiField(nspin,nc)
         phi = space.FermiField(nspin,nc)
@@ -2167,8 +2152,7 @@ class TestFermions(unittest.TestCase):
         r = 1.0
         kappa = 0.1234
 
-        comm = Communicator()
-        space = comm.Lattice([N,N,N,N])
+        space = Q.Lattice([N,N,N,N])
         U = space.GaugeField(nc)
         psi = space.StaggeredField(nc)
         phi = space.StaggeredField(nc)
@@ -2215,11 +2199,8 @@ class TestInverters(unittest.TestCase):
         N, nspin, nc = 9, 4, 3
         r = 1.0
         kappa = 0.1234
-        I = identity(4)
-        gamma = GAMMA['fermilab']
 
-        comm = Communicator()
-        space = comm.Lattice([N,N,N,N])
+        space = Q.Lattice([N,N,N,N])
         U = space.GaugeField(nc)
         psi = space.FermiField(nspin,nc)
         phi = space.FermiField(nspin,nc)
@@ -2229,8 +2210,8 @@ class TestInverters(unittest.TestCase):
         Dslash = FermiOperator(U)
         Dslash.add_term(1.0, None)
         for mu in (1,2,3,4):
-            Dslash.add_term(kappa*(r*I-gamma[mu]), [(mu,)])
-            Dslash.add_term(kappa*(r*I+gamma[mu]), [(-mu,)])
+            Dslash.add_term(kappa*(r*I-G[mu]), [(mu,)])
+            Dslash.add_term(kappa*(r*I+G[mu]), [(-mu,)])
         phi.set(invert_bicgstab,Dslash,psi)
         chi = phi.slice((0,0),(0,0))
         Canvas().imshow(chi).save('fermi.prop.png')
@@ -2250,11 +2231,8 @@ class TestInverters(unittest.TestCase):
         N, nspin, nc = 9, 4, 3
         r = 1.0
         kappa = 0.1234
-        I = identity(4)
-        gamma = GAMMA['fermilab']
 
-        comm = Communicator()
-        space = comm.Lattice([N,N,N,N])
+        space = Q.Lattice([N,N,N,N])
         U = space.GaugeField(nc)
         phi = space.FermiField(nspin,nc)
         U.set_cold()
@@ -2275,8 +2253,7 @@ class TestInverters(unittest.TestCase):
 class TestSmearing(unittest.TestCase):
     def test_gauge_smearing(self):
         N, nc = 4, 3
-        comm = Communicator()
-        space = comm.Lattice([N,N,N,N])
+        space = Q.Lattice([N,N,N,N])
         U = space.GaugeField(nc)
         U.set_cold()
         op = GaugeSmearOperator(U).add_term([1],1.0).add_term([2,1,-2],0.1)
@@ -2285,11 +2262,8 @@ class TestSmearing(unittest.TestCase):
         self.assertTrue(abs(U.average_plaquette()-1.0)<1e-4)
         self.assertTrue(abs(V.average_plaquette()-(1.0+0.1*6)**4)<1e-3)
     def test_fermi_smearing(self):
-        gamma = GAMMA['fermilab']
-        I = identity(4)
         N, nc,nspin = 9, 3, 4
-        comm = Communicator()
-        space = comm.Lattice([N,N,N,N])
+        space = Q.Lattice([N,N,N,N])
         U = space.GaugeField(nc)
         U.set_cold()
         psi = space.FermiField(nspin,nc)
@@ -2306,8 +2280,7 @@ class TestSmearing(unittest.TestCase):
 
 def test_hadrons():
     N = 8
-    comm = Communicator()
-    lattice = comm.Lattice((N,N,N,N))
+    lattice = Q.Lattice((N,N,N,N))
     q1 = lattice.FermiField(4,3)
     q2 = lattice.FermiField(4,3)
     q3 = lattice.FermiField(4,3)
@@ -2320,11 +2293,7 @@ def test():
     kappa = 0.1234
     c_SW = 0.5
     
-    I = identity(4)
-    gamma = GAMMA['fermilab']
-    
-    comm = Communicator()
-    space = comm.Lattice([N,N,N,N])
+    space = Q.Lattice([N,N,N,N])
     U = space.GaugeField(nc)
     psi = space.FermiField(nspin,nc)
     phi = space.FermiField(nspin,nc)
@@ -2337,6 +2306,11 @@ def test():
         Dslash.add_wilson4d_action(kappa)
         Dslash.add_clover4d_terms(c_SW)
         phi.set(Dslash, psi)
+
+# for tests
+I = identity(4)
+G = GAMMA['fermilab']
+Q = Communicator()
 
 if __name__=='__main__':
     # python -m unittest test_module.TestClass.test_method
