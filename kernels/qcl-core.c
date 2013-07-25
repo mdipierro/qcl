@@ -202,6 +202,7 @@ kernel void set_custom(global cfloat_t *U,
       }
 }
 
+
 kernel void set_hot(global cfloat_t *U,
                     int d,
                     int n,
@@ -215,7 +216,6 @@ kernel void set_hot(global cfloat_t *U,
     SU(U+(idx*d+mu)*n*n,n,&rst,gid);
   ranluxcl_upload_seed(&rst,ranluxcltab);
 }
-
 
 void heatbath_SU2(cfloat_t *a,
                   float beta_eff,

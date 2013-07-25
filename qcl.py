@@ -54,7 +54,7 @@ def check_free_ram():
 ###
 
 class Canvas(object):
-    def __init__(self,title='title',xlab='x',ylab='y',xrange=None,yrange=None):
+    def __init__(self,title='',xlab='',ylab='',xrange=None,yrange=None):
         from matplotlib.figure import Figure
         self.fig = Figure()
         self.fig.set_facecolor('white')
