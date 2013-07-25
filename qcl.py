@@ -1034,7 +1034,7 @@ class GaugeAction(object):
         self.add_term((1,2,-1,-2),1.0)
         return self
 
-    def heatbath(self,beta,n_iter=1,m_iter=1,name='aux'):
+    def heatbath(self,beta,n_iter=1,m_iter=5,name='aux'):
         """
         Generates a kernel which performs the SU(n) heatbath.
         Example:
@@ -1911,7 +1911,7 @@ def clone(a):
     else:
         return numpy.empty_like(a)
 
-def invert_minimum_residue(y,f,x,ap=1e-4,rp=1e-4,ns=200):
+def invert_minimum_residue(y,f,x,ap=1e-4,rp=1e-4,ns=1000):
     q = clone(x)
     r = clone(x)
     copy_elements(y, x) # x-> y
@@ -1925,10 +1925,11 @@ def invert_minimum_residue(y,f,x,ap=1e-4,rp=1e-4,ns=200):
         r -= alpha*q
         residue = math.sqrt(vdot(r,r).real/r.size)
         norm = math.sqrt(vdot(y,y).real)
-        if residue<max(ap,norm*rp): return y
+        if k>10 and residue<max(ap,norm*rp):
+            return y
     raise ArithmeticError('no convergence')
 
-def invert_bicgstab(y,f,x,ap=1e-4,rp=1e-4,ns=200):
+def invert_bicgstab(y,f,x,ap=1e-4,rp=1e-4,ns=1000):
     p = clone(x)
     q = clone(x)
     t = clone(x)
@@ -1940,7 +1941,7 @@ def invert_bicgstab(y,f,x,ap=1e-4,rp=1e-4,ns=200):
     r += x
     copy_elements(q, r)
     rho_old = alpha = omega = 1.0
-    for k in xrange(10):
+    for k in xrange(ns):
         rho = vdot(q,r)
         beta = (rho/rho_old)*(alpha/omega)
         rho_old = rho
